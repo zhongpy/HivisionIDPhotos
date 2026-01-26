@@ -1,14 +1,16 @@
 {
+  "debug": true,
   "thresholds": {
     "brightness_min": 80.0,
     "brightness_max": 200.0,
     "sharpness_min": 80.0,
     "eye_ear_min": 0.18,
+    "eye_area_ratio_min": 0.004,
     "occlusion_ratio_min": 0.55,
     "skin_ratio_min": 0.40,
     "glasses_ratio_min": 0.001,
     "matting_head_coverage_min": 0.80,
-    "matting_top_coverage_min": 0.55
+    "matting_top_coverage_min": 0.60
   },
   "matting": {
     "head_box": {
@@ -27,14 +29,16 @@
     },
     "face_parsing": {
       "enabled": true,
-      "model_path": "hivision/creator/weights/face_parsing_bisenet.onnx",
-      "input_size": 512,
+      "model_path": "hivision/creator/weights/face_parsing.onnx",
+      "input_size": 224,
       "color_order": "RGB",
       "mean": [0.485, 0.456, 0.406],
       "std": [0.229, 0.224, 0.225],
       "labels": {
         "skin": [1],
-        "eyeglass": [6]
+        "eyeglass": [3],
+        "left_eye": [4],
+        "right_eye": [5]
       }
     }
   }

@@ -22,29 +22,33 @@ except ImportError:  # pragma: no cover - handled at runtime
 
 
 DEFAULT_CONFIG = {
+    "debug": False,
     "thresholds": {
         "brightness_min": 80.0,
         "brightness_max": 200.0,
         "sharpness_min": 80.0,
         "eye_ear_min": 0.18,
+        "eye_area_ratio_min": 0.004,
         "occlusion_ratio_min": 0.55,
         "skin_ratio_min": 0.40,
-        "glasses_ratio_min": 0.01,
-        "matting_head_coverage_min": 0.85,
-        "matting_top_coverage_min": 0.60,
+        "glasses_ratio_min": 0.001,
+        "matting_head_coverage_min": 0.80,
+        "matting_top_coverage_min": 0.60
     },
     "models": {
         "face_parsing": {
             "enabled": True,
-            "model_path": "hivision/creator/weights/face_parsing_bisenet.onnx",
-            "input_size": 512,
+            "model_path": "hivision/creator/weights/face_parsing.onnx",
+            "input_size": 224,
             "color_order": "RGB",
             "mean": [0.485, 0.456, 0.406],
             "std": [0.229, 0.224, 0.225],
             "labels": {
                 "skin": [1],
-                "eyeglass": [6],
-            },
+                "eyeglass": [3],
+                "left_eye": [4],
+                "right_eye": [5]
+            }
         }
     },
 }
@@ -91,6 +95,10 @@ def _resolve_path(path_value: str) -> str:
         return path_value
     root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     return os.path.join(root_dir, path_value)
+
+def _debug_log(config: dict, message: str):
+    if config.get("debug"):
+        print(f"[Compliance] {message}")
 
 
 def _get_face_mesh():
@@ -369,6 +377,8 @@ def _face_parsing_metrics(face_roi: np.ndarray) -> Tuple[Optional[float], Option
     labels = parser.labels or {}
     skin_labels = labels.get("skin", [])
     eyeglass_labels = labels.get("eyeglass", [])
+    left_eye_labels = labels.get("left_eye", [])
+    right_eye_labels = labels.get("right_eye", [])
 
     def _ratio_for(label_list):
         if not label_list:
@@ -380,7 +390,10 @@ def _face_parsing_metrics(face_roi: np.ndarray) -> Tuple[Optional[float], Option
 
     skin_ratio = _ratio_for(skin_labels) if skin_labels else None
     glasses_ratio = _ratio_for(eyeglass_labels) if eyeglass_labels else None
-    return skin_ratio, glasses_ratio
+    eye_ratio = None
+    if left_eye_labels or right_eye_labels:
+        eye_ratio = _ratio_for(left_eye_labels + right_eye_labels)
+    return skin_ratio, glasses_ratio, eye_ratio
 
 def _matting_head_coverage(
     matting_image: np.ndarray,
@@ -415,136 +428,193 @@ def _matting_head_coverage(
     return head_coverage, top_coverage
 
 
-def check_compliance(ctx: Context) -> Dict:
+def check_compliance(ctx: Context, stage: str = "full") -> Dict:
     config = _load_config()
     thresholds = config.get("thresholds", {})
-    report = {"status": True, "items": {}, "reasons": []}
+    report = {"status": True, "items": {}, "reasons": [], "stage": stage}
     face_rect = ctx.face.get("rectangle") if ctx.face else None
     face_roi = _face_roi(ctx.origin_image, face_rect)
+    _debug_log(config, f"origin_image={None if ctx.origin_image is None else ctx.origin_image.shape}")
+    _debug_log(config, f"matting_image={None if ctx.matting_image is None else ctx.matting_image.shape}")
+    _debug_log(config, f"face_rect={face_rect}")
+    _debug_log(config, f"face_roi={None if face_roi is None else face_roi.shape}")
 
-    brightness = _brightness_value(face_roi)
-    brightness_min = thresholds.get("brightness_min", DEFAULT_CONFIG["thresholds"]["brightness_min"])
-    brightness_max = thresholds.get("brightness_max", DEFAULT_CONFIG["thresholds"]["brightness_max"])
-    brightness_ok = brightness is not None and brightness_min <= brightness <= brightness_max
-    report["items"]["brightness"] = {
-        "value": brightness,
-        "ok": brightness_ok,
-        "thresholds": {
-            "min": brightness_min,
-            "max": brightness_max,
-        },
-    }
-    if not brightness_ok:
-        report["reasons"].append("brightness_out_of_range")
+    run_pre = stage in ("pre", "full")
+    run_post = stage in ("post", "full")
 
-    sharpness = _sharpness_value(face_roi)
-    sharpness_min = thresholds.get("sharpness_min", DEFAULT_CONFIG["thresholds"]["sharpness_min"])
-    sharpness_ok = sharpness is not None and sharpness >= sharpness_min
-    report["items"]["sharpness"] = {
-        "value": sharpness,
-        "ok": sharpness_ok,
-        "thresholds": {
-            "min": sharpness_min,
-        },
-    }
-    if not sharpness_ok:
-        report["reasons"].append("sharpness_low")
+    if run_pre:
+        brightness = _brightness_value(face_roi)
+        brightness_min = thresholds.get("brightness_min", DEFAULT_CONFIG["thresholds"]["brightness_min"])
+        brightness_max = thresholds.get("brightness_max", DEFAULT_CONFIG["thresholds"]["brightness_max"])
+        brightness_ok = brightness is not None and brightness_min <= brightness <= brightness_max
+        report["items"]["brightness"] = {
+            "value": brightness,
+            "ok": brightness_ok,
+            "thresholds": {
+                "min": brightness_min,
+                "max": brightness_max,
+            },
+        }
+        if not brightness_ok:
+            report["reasons"].append("brightness_out_of_range")
+        _debug_log(config, f"brightness={brightness} ok={brightness_ok} min={brightness_min} max={brightness_max}")
 
-    try:
-        eyes_ear = _eyes_open_value(face_roi if face_roi is not None else ctx.origin_image, ctx.origin_image)
-    except ImportError:
-        eyes_ear = None
-    eye_ear_min = thresholds.get("eye_ear_min", DEFAULT_CONFIG["thresholds"]["eye_ear_min"])
-    eyes_ok = eyes_ear is not None and eyes_ear >= eye_ear_min
-    report["items"]["eyes_open"] = {
-        "value": eyes_ear,
-        "ok": eyes_ok,
-        "thresholds": {
-            "min": eye_ear_min,
-        },
-    }
-    if not eyes_ok:
-        report["reasons"].append("eyes_closed_or_unknown")
+        sharpness = _sharpness_value(face_roi)
+        sharpness_min = thresholds.get("sharpness_min", DEFAULT_CONFIG["thresholds"]["sharpness_min"])
+        sharpness_ok = sharpness is not None and sharpness >= sharpness_min
+        report["items"]["sharpness"] = {
+            "value": sharpness,
+            "ok": sharpness_ok,
+            "thresholds": {
+                "min": sharpness_min,
+            },
+        }
+        if not sharpness_ok:
+            report["reasons"].append("sharpness_low")
+        _debug_log(config, f"sharpness={sharpness} ok={sharpness_ok} min={sharpness_min}")
 
-    parsing_skin_ratio, parsing_glasses_ratio = _face_parsing_metrics(face_roi)
-    glasses_ratio_min = thresholds.get("glasses_ratio_min", DEFAULT_CONFIG["thresholds"]["glasses_ratio_min"])
-    glasses_ok = None
-    glasses_count = None
-    if parsing_glasses_ratio is not None:
-        glasses_ok = parsing_glasses_ratio < glasses_ratio_min
-    else:
-        glasses_count = _glasses_count(face_roi)
-        glasses_ok = glasses_count is not None and glasses_count == 0
-    report["items"]["glasses"] = {
-        "value": parsing_glasses_ratio if parsing_glasses_ratio is not None else glasses_count,
-        "ok": glasses_ok,
-        "thresholds": {
-            "max": 0 if parsing_glasses_ratio is None else glasses_ratio_min,
-        },
-        "source": "face_parsing" if parsing_glasses_ratio is not None else "haar",
-    }
-    if not glasses_ok:
-        report["reasons"].append("glasses_detected_or_unknown")
+        parsing_skin_ratio, parsing_glasses_ratio, parsing_eye_ratio = _face_parsing_metrics(face_roi)
 
-    try:
-        occlusion_ratio = _occlusion_ratio_value(face_roi if face_roi is not None else ctx.origin_image, ctx.origin_image)
-    except ImportError:
-        occlusion_ratio = None
-    occlusion_ratio_min = thresholds.get("occlusion_ratio_min", DEFAULT_CONFIG["thresholds"]["occlusion_ratio_min"])
-    skin_ratio_min = thresholds.get("skin_ratio_min", DEFAULT_CONFIG["thresholds"]["skin_ratio_min"])
-    occlusion_ok = None
-    if parsing_skin_ratio is not None:
-        occlusion_ok = parsing_skin_ratio >= skin_ratio_min
-        occlusion_value = parsing_skin_ratio
-        occlusion_source = "face_parsing"
-        occlusion_threshold = skin_ratio_min
-    else:
-        occlusion_ok = occlusion_ratio is not None and occlusion_ratio >= occlusion_ratio_min
-        occlusion_value = occlusion_ratio
-        occlusion_source = "gradient"
-        occlusion_threshold = occlusion_ratio_min
-    report["items"]["occlusion"] = {
-        "value": occlusion_value,
-        "ok": occlusion_ok,
-        "thresholds": {
-            "min": occlusion_threshold,
-        },
-        "source": occlusion_source,
-    }
-    if not occlusion_ok:
-        report["reasons"].append("facial_features_occluded_or_unknown")
+        try:
+            eyes_ear = _eyes_open_value(
+                face_roi if face_roi is not None else ctx.origin_image,
+                ctx.origin_image,
+            )
+        except ImportError:
+            eyes_ear = None
+        eye_ear_min = thresholds.get("eye_ear_min", DEFAULT_CONFIG["thresholds"]["eye_ear_min"])
+        eye_area_min = thresholds.get("eye_area_ratio_min")
+        eyes_ok = eyes_ear is not None and eyes_ear >= eye_ear_min
+        if eyes_ear is None and parsing_eye_ratio is not None and eye_area_min is not None:
+            eyes_ear = parsing_eye_ratio
+            eyes_ok = eyes_ear >= eye_area_min
+            report["items"]["eyes_open"] = {
+                "value": eyes_ear,
+                "ok": eyes_ok,
+                "thresholds": {
+                    "min": eye_area_min,
+                },
+                "source": "face_parsing",
+            }
+        else:
+            report["items"]["eyes_open"] = {
+                "value": eyes_ear,
+                "ok": eyes_ok,
+                "thresholds": {
+                    "min": eye_ear_min,
+                },
+                "source": "mesh",
+            }
+        if not eyes_ok:
+            report["reasons"].append("eyes_closed_or_unknown")
+        _debug_log(
+            config,
+            f"eyes_open={eyes_ear} ok={eyes_ok} min={eye_area_min if report['items']['eyes_open']['source'] == 'face_parsing' else eye_ear_min} "
+            f"source={report['items']['eyes_open']['source']}",
+        )
+        glasses_ratio_min = thresholds.get("glasses_ratio_min", DEFAULT_CONFIG["thresholds"]["glasses_ratio_min"])
+        glasses_ok = None
+        glasses_count = None
+        if parsing_glasses_ratio is not None:
+            glasses_ok = parsing_glasses_ratio < glasses_ratio_min
+        else:
+            glasses_count = _glasses_count(face_roi)
+            glasses_ok = glasses_count is not None and glasses_count == 0
+        report["items"]["glasses"] = {
+            "value": parsing_glasses_ratio if parsing_glasses_ratio is not None else glasses_count,
+            "ok": glasses_ok,
+            "thresholds": {
+                "max": 0 if parsing_glasses_ratio is None else glasses_ratio_min,
+            },
+            "source": "face_parsing" if parsing_glasses_ratio is not None else "haar",
+        }
+        if not glasses_ok:
+            report["reasons"].append("glasses_detected_or_unknown")
+        _debug_log(
+            config,
+            f"glasses_value={report['items']['glasses']['value']} ok={glasses_ok} "
+            f"threshold={report['items']['glasses']['thresholds']['max']} source={report['items']['glasses']['source']}",
+        )
 
-    head_box = config.get("matting", {}).get("head_box")
-    top_fraction = config.get("matting", {}).get("top_fraction")
-    head_coverage, top_coverage = _matting_head_coverage(
-        ctx.matting_image,
-        face_rect,
-        box_factors=head_box,
-        top_fraction=top_fraction,
-    )
-    matting_head_min = thresholds.get("matting_head_coverage_min", DEFAULT_CONFIG["thresholds"]["matting_head_coverage_min"])
-    matting_top_min = thresholds.get("matting_top_coverage_min", DEFAULT_CONFIG["thresholds"]["matting_top_coverage_min"])
-    head_ok = head_coverage is not None and head_coverage >= matting_head_min
-    top_ok = top_coverage is not None and top_coverage >= matting_top_min
-    report["items"]["matting_head_coverage"] = {
-        "value": head_coverage,
-        "ok": head_ok,
-        "thresholds": {
-            "min": matting_head_min,
-        },
-    }
-    report["items"]["matting_top_coverage"] = {
-        "value": top_coverage,
-        "ok": top_ok,
-        "thresholds": {
-            "min": matting_top_min,
-        },
-    }
-    if not head_ok or not top_ok:
-        report["reasons"].append("matting_head_incomplete")
+        try:
+            occlusion_ratio = _occlusion_ratio_value(
+                face_roi if face_roi is not None else ctx.origin_image,
+                ctx.origin_image,
+            )
+        except ImportError:
+            occlusion_ratio = None
+        occlusion_ratio_min = thresholds.get("occlusion_ratio_min", DEFAULT_CONFIG["thresholds"]["occlusion_ratio_min"])
+        skin_ratio_min = thresholds.get("skin_ratio_min", DEFAULT_CONFIG["thresholds"]["skin_ratio_min"])
+        occlusion_ok = None
+        if parsing_skin_ratio is not None:
+            occlusion_ok = parsing_skin_ratio >= skin_ratio_min
+            occlusion_value = parsing_skin_ratio
+            occlusion_source = "face_parsing"
+            occlusion_threshold = skin_ratio_min
+        else:
+            occlusion_ok = occlusion_ratio is not None and occlusion_ratio >= occlusion_ratio_min
+            occlusion_value = occlusion_ratio
+            occlusion_source = "gradient"
+            occlusion_threshold = occlusion_ratio_min
+        report["items"]["occlusion"] = {
+            "value": occlusion_value,
+            "ok": occlusion_ok,
+            "thresholds": {
+                "min": occlusion_threshold,
+            },
+            "source": occlusion_source,
+        }
+        if not occlusion_ok:
+            report["reasons"].append("facial_features_occluded_or_unknown")
+        _debug_log(
+            config,
+            f"occlusion_value={occlusion_value} ok={occlusion_ok} min={occlusion_threshold} source={occlusion_source}",
+        )
+
+    if run_post:
+        head_box = config.get("matting", {}).get("head_box")
+        top_fraction = config.get("matting", {}).get("top_fraction")
+        head_coverage, top_coverage = _matting_head_coverage(
+            ctx.matting_image,
+            face_rect,
+            box_factors=head_box,
+            top_fraction=top_fraction,
+        )
+        matting_head_min = thresholds.get("matting_head_coverage_min", DEFAULT_CONFIG["thresholds"]["matting_head_coverage_min"])
+        matting_top_min = thresholds.get("matting_top_coverage_min", DEFAULT_CONFIG["thresholds"]["matting_top_coverage_min"])
+        head_ok = head_coverage is not None and head_coverage >= matting_head_min
+        top_ok = top_coverage is not None and top_coverage >= matting_top_min
+        report["items"]["matting_head_coverage"] = {
+            "value": head_coverage,
+            "ok": head_ok,
+            "thresholds": {
+                "min": matting_head_min,
+            },
+        }
+        report["items"]["matting_top_coverage"] = {
+            "value": top_coverage,
+            "ok": top_ok,
+            "thresholds": {
+                "min": matting_top_min,
+            },
+        }
+        if not head_ok or not top_ok:
+            report["reasons"].append("matting_head_incomplete")
+        _debug_log(
+            config,
+            f"matting_head_coverage={head_coverage} ok={head_ok} min={matting_head_min} "
+            f"matting_top_coverage={top_coverage} ok={top_ok} min={matting_top_min}",
+        )
 
     report["status"] = len(report["reasons"]) == 0
-    ctx.compliance = report
     if not report["status"]:
         raise ComplianceError(report)
     return report
+
+
+def check_pre_compliance(ctx: Context) -> Dict:
+    return check_compliance(ctx, stage="pre")
+
+
+def check_post_compliance(ctx: Context) -> Dict:
+    return check_compliance(ctx, stage="post")

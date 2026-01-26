@@ -15,7 +15,7 @@ from .human_matting import extract_human
 from .face_detector import detect_face_mtcnn
 from hivision.plugin.beauty.handler import beauty_face
 from .photo_adjuster import adjust_photo
-from .compliance import check_compliance
+from .compliance import check_pre_compliance, check_post_compliance
 import cv2
 import time
 
@@ -47,7 +47,8 @@ class IDCreator:
         self.matting_handler: ContextHandler = extract_human
         self.detection_handler: ContextHandler = detect_face_mtcnn
         self.beauty_handler: ContextHandler = beauty_face
-        self.compliance_handler: ContextHandler = check_compliance
+        self.pre_compliance_handler: ContextHandler = check_pre_compliance
+        self.post_compliance_handler: ContextHandler = check_post_compliance
         # 上下文
         self.ctx = None
 
@@ -182,13 +183,14 @@ class IDCreator:
             end_alignment_time = time.time()
             print(f"[3.1]  Face Alignment Time: {end_alignment_time - start_alignment_time:.3f}s")
 
-        # 3.2 ------------------合规检测------------------
-        if self.compliance_handler:
-            print("[3.2]  Start Compliance Check...")
+        # 3.2 ------------------合规检测(原图)------------------
+        if self.pre_compliance_handler:
+            print("[3.2]  Start Pre-Compliance Check...")
             start_compliance_time = time.time()
-            self.compliance_handler(ctx)
+            pre_report = self.pre_compliance_handler(ctx)
+            ctx.compliance = {"pre": pre_report}
             end_compliance_time = time.time()
-            print(f"[3.2]  Compliance Check Time: {end_compliance_time - start_compliance_time:.3f}s")
+            print(f"[3.2]  Pre-Compliance Check Time: {end_compliance_time - start_compliance_time:.3f}s")
 
         # 4. ------------------图像调整------------------
         print("[4]  Start Image Post-Adjustment...")
@@ -198,6 +200,17 @@ class IDCreator:
         )
         end_adjust_time = time.time()
         print(f"[4]  Image Post-Adjustment Time: {end_adjust_time - start_adjust_time:.3f}s")
+
+        # 4.1 ------------------合规检测(抠图完整性)------------------
+        if self.post_compliance_handler:
+            print("[4.1]  Start Post-Compliance Check...")
+            start_compliance_time = time.time()
+            post_report = self.post_compliance_handler(ctx)
+            if ctx.compliance is None:
+                ctx.compliance = {}
+            ctx.compliance["post"] = post_report
+            end_compliance_time = time.time()
+            print(f"[4.1]  Post-Compliance Check Time: {end_compliance_time - start_compliance_time:.3f}s")
 
         # 5. ------------------返回结果------------------
         ctx.result = Result(
