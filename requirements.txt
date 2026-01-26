@@ -5,3 +5,4 @@ requests
 mtcnn-runtime
 tqdm
 starlette
+mediapipe>=0.10.0

@@ -1,6 +1,6 @@
 from fastapi import FastAPI, UploadFile, Form, File
 from hivision import IDCreator
-from hivision.error import FaceError
+from hivision.error import FaceError, ComplianceError
 from hivision.creator.layout_calculator import (
     generate_layout_array,
     generate_layout_image,
@@ -94,6 +94,8 @@ async def idphoto_inference(
         )
     except FaceError:
         result_message = {"status": False}
+    except ComplianceError as exc:
+        result_message = {"status": False, "compliance": exc.report}
     # 如果检测到人脸数量等于1, 则返回标准证和高清照结果（png 4通道图像）
     else:
         result_image_standard_bytes = save_image_dpi_to_bytes(result.standard, None, dpi)
@@ -101,6 +103,7 @@ async def idphoto_inference(
         result_message = {
             "status": True,
             "image_base64_standard": bytes_2_base64(result_image_standard_bytes),
+            "compliance": result.compliance,
         }
 
         # 如果hd为True, 则增加高清照结果（png 4通道图像）

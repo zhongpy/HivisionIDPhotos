@@ -1,8 +1,9 @@
-import os
+﻿import os
 import cv2
 import argparse
+import json
 import numpy as np
-from hivision.error import FaceError
+from hivision.error import FaceError, ComplianceError
 from hivision.utils import hex_to_rgb, resize_image_to_kb, add_background, save_image_dpi_to_bytes
 from hivision import IDCreator
 from hivision.creator.layout_calculator import (
@@ -34,95 +35,98 @@ FACE_DETECT_MODEL = [
 ]
 RENDER = [0, 1, 2]
 
-parser = argparse.ArgumentParser(description="HivisionIDPhotos 证件照制作推理程序。")
+parser = argparse.ArgumentParser(description="HivisionIDPhotos 璇佷欢鐓у埗浣滄帹鐞嗙▼搴忋€?)
 parser.add_argument(
     "-t",
     "--type",
-    help="请求 API 的种类",
+    help="璇锋眰 API 鐨勭绫?,
     choices=INFERENCE_TYPE,
     default="idphoto",
 )
-parser.add_argument("-i", "--input_image_dir", help="输入图像路径", required=True)
-parser.add_argument("-o", "--output_image_dir", help="保存图像路径", required=True)
-parser.add_argument("--height", help="证件照尺寸-高", default=413)
-parser.add_argument("--width", help="证件照尺寸-宽", default=295)
-parser.add_argument("-c", "--color", help="证件照背景色", default="638cce")
-parser.add_argument("--hd", type=bool, help="是否输出高清照", default=True)
+parser.add_argument("-i", "--input_image_dir", help="杈撳叆鍥惧儚璺緞", required=True)
+parser.add_argument("-o", "--output_image_dir", help="淇濆瓨鍥惧儚璺緞", required=True)
+parser.add_argument("--height", help="璇佷欢鐓у昂瀵?楂?, default=413)
+parser.add_argument("--width", help="璇佷欢鐓у昂瀵?瀹?, default=295)
+parser.add_argument("-c", "--color", help="璇佷欢鐓ц儗鏅壊", default="638cce")
+parser.add_argument("--hd", type=bool, help="鏄惁杈撳嚭楂樻竻鐓?, default=True)
 parser.add_argument(
-    "-k", "--kb", help="输出照片的 KB 值，仅对换底和制作排版照生效", default=None
+    "-k", "--kb", help="杈撳嚭鐓х墖鐨?KB 鍊硷紝浠呭鎹㈠簳鍜屽埗浣滄帓鐗堢収鐢熸晥", default=None
 )
 parser.add_argument(
     "-r",
     "--render",
     type=int,
-    help="底色合成的模式，有 0:纯色、1:上下渐变、2:中心渐变 可选",
+    help="搴曡壊鍚堟垚鐨勬ā寮忥紝鏈?0:绾壊銆?:涓婁笅娓愬彉銆?:涓績娓愬彉 鍙€?,
     choices=RENDER,
     default=0,
 )
 parser.add_argument(
     "--dpi",
     type=int,
-    help="输出照片的 DPI 值",
+    help="杈撳嚭鐓х墖鐨?DPI 鍊?,
     default=300,
 )
 parser.add_argument(
     "--face_align",
     type=bool,
-    help="是否进行人脸旋转矫正",
+    help="鏄惁杩涜浜鸿劯鏃嬭浆鐭",
     default=False,
 )
 parser.add_argument(
     "--matting_model",
-    help="抠图模型权重",
+    help="鎶犲浘妯″瀷鏉冮噸",
     default="modnet_photographic_portrait_matting",
     choices=MATTING_MODEL,
 )
 parser.add_argument(
     "--face_detect_model",
-    help="人脸检测模型",
+    help="浜鸿劯妫€娴嬫ā鍨?,
     default="mtcnn",
     choices=FACE_DETECT_MODEL,
 )
 
 args = parser.parse_args()
 
-# ------------------- 选择抠图与人脸检测模型 -------------------
+# ------------------- 閫夋嫨鎶犲浘涓庝汉鑴告娴嬫ā鍨?-------------------
 creator = IDCreator()
 choose_handler(creator, args.matting_model, args.face_detect_model)
 
 root_dir = os.path.dirname(os.path.abspath(__file__))
 input_image = cv2.imread(args.input_image_dir, cv2.IMREAD_UNCHANGED)
 
-# 如果模式是生成证件照
+# 濡傛灉妯″紡鏄敓鎴愯瘉浠剁収
 if args.type == "idphoto":
-    # 将字符串转为元组
+    # 灏嗗瓧绗︿覆杞负鍏冪粍
     size = (int(args.height), int(args.width))
     try:
         result = creator(input_image, size=size, face_alignment=args.face_align)
     except FaceError:
-        print("人脸数量不等于 1，请上传单张人脸的图像。")
+        print("浜鸿劯鏁伴噺涓嶇瓑浜?1锛岃涓婁紶鍗曞紶浜鸿劯鐨勫浘鍍忋€?)
+    except ComplianceError as exc:
+        print(json.dumps(exc.report, ensure_ascii=False))
     else:
-        # 保存标准照
+        print(json.dumps(result.compliance, ensure_ascii=False))
+        # 淇濆瓨鏍囧噯鐓?
         save_image_dpi_to_bytes(cv2.cvtColor(result.standard, cv2.COLOR_RGBA2BGRA), args.output_image_dir, dpi=args.dpi)
 
-        # 保存高清照
+        # 淇濆瓨楂樻竻鐓?
         file_name, file_extension = os.path.splitext(args.output_image_dir)
         new_file_name = file_name + "_hd" + file_extension
         save_image_dpi_to_bytes(cv2.cvtColor(result.hd, cv2.COLOR_RGBA2BGRA), new_file_name, dpi=args.dpi)
 
-# 如果模式是人像抠图
+# 濡傛灉妯″紡鏄汉鍍忔姞鍥?
 elif args.type == "human_matting":
     result = creator(input_image, change_bg_only=True)
     cv2.imwrite(args.output_image_dir, result.hd)
 
-# 如果模式是添加背景
+# 濡傛灉妯″紡鏄坊鍔犺儗鏅?
 elif args.type == "add_background":
 
     render_choice = ["pure_color", "updown_gradient", "center_gradient"]
 
-    # 将字符串转为元组
+    # 灏嗗瓧绗︿覆杞负鍏冪粍
     color = hex_to_rgb(args.color)
-    # 将元祖的 0 和 2 号数字交换
+    # 灏嗗厓绁栫殑 0 鍜?2 鍙锋暟瀛椾氦鎹?
     color = (color[2], color[1], color[0])
 
     result_image = add_background(
@@ -136,7 +140,7 @@ elif args.type == "add_background":
     else:
         save_image_dpi_to_bytes(cv2.cvtColor(result_image, cv2.COLOR_RGBA2BGRA), args.output_image_dir, dpi=args.dpi)
 
-# 如果模式是生成排版照
+# 濡傛灉妯″紡鏄敓鎴愭帓鐗堢収
 elif args.type == "generate_layout_photos":
 
     size = (int(args.height), int(args.width))
@@ -161,19 +165,23 @@ elif args.type == "generate_layout_photos":
     else:
         save_image_dpi_to_bytes(cv2.cvtColor(result_layout_image, cv2.COLOR_RGBA2BGRA), args.output_image_dir, dpi=args.dpi)
 
-# 如果模式是证件照裁切
+# 濡傛灉妯″紡鏄瘉浠剁収瑁佸垏
 elif args.type == "idphoto_crop":
-    # 将字符串转为元组
+    # 灏嗗瓧绗︿覆杞负鍏冪粍
     size = (int(args.height), int(args.width))
     try:
         result = creator(input_image, size=size, crop_only=True)
     except FaceError:
-        print("人脸数量不等于 1，请上传单张人脸的图像。")
+        print("浜鸿劯鏁伴噺涓嶇瓑浜?1锛岃涓婁紶鍗曞紶浜鸿劯鐨勫浘鍍忋€?)
+    except ComplianceError as exc:
+        print(json.dumps(exc.report, ensure_ascii=False))
     else:
-        # 保存标准照
+        print(json.dumps(result.compliance, ensure_ascii=False))
+        # 淇濆瓨鏍囧噯鐓?
         save_image_dpi_to_bytes(cv2.cvtColor(result.standard, cv2.COLOR_RGBA2BGRA), args.output_image_dir, dpi=args.dpi)
 
-        # 保存高清照
+        # 淇濆瓨楂樻竻鐓?
         file_name, file_extension = os.path.splitext(args.output_image_dir)
         new_file_name = file_name + "_hd" + file_extension
         save_image_dpi_to_bytes(cv2.cvtColor(result.hd, cv2.COLOR_RGBA2BGRA), new_file_name, dpi=args.dpi)
+

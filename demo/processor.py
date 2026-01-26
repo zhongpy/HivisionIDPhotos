@@ -1,6 +1,7 @@
+import json
 import numpy as np
 from hivision import IDCreator
-from hivision.error import FaceError, APIError
+from hivision.error import FaceError, APIError, ComplianceError
 from hivision.utils import (
     add_background,
     add_background_with_image,
@@ -155,6 +156,8 @@ class IDPhotoProcessor:
             )
         except (FaceError, APIError):
             return self._handle_photo_generation_error(language)
+        except ComplianceError as exc:
+            return self._handle_compliance_error(language, exc.report)
 
         # 后处理生成的照片
         return self._process_generated_photo(
@@ -329,6 +332,16 @@ class IDPhotoProcessor:
             gr.update(
                 value=LOCALES["notification"][language]["face_error"], visible=True
             ),
+        ]
+
+    def _handle_compliance_error(self, language, report):
+        """处理合规检测错误"""
+        report_text = json.dumps(report, ensure_ascii=False)
+        return [gr.update(value=None) for _ in range(4)] + [
+            gr.update(visible=False),
+            gr.update(value=None),
+            gr.update(value=None),
+            gr.update(value=report_text, visible=True),
         ]
 
     # 处理生成的照片

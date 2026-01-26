@@ -109,6 +109,7 @@ class Result:
         clothing_params: Optional[dict],
         typography_params: Optional[dict],
         face: Optional[Tuple[int, int, int, int, float]],
+        compliance: Optional[dict] = None,
     ):
         self.standard = standard
         self.hd = hd
@@ -122,6 +123,7 @@ class Result:
         排版参数，仅换底时为 None
         """
         self.face = face
+        self.compliance = compliance
 
     def __iter__(self):
         return iter(
@@ -163,6 +165,10 @@ class Context:
         self.result: Optional[Result] = None
         """
         证件照处理结果
+        """
+        self.compliance: Optional[dict] = None
+        """
+        Compliance report with numeric values and reasons.
         """
         self.align_info: Optional[dict] = None
         """

@@ -31,3 +31,14 @@ class APIError(Exception):
         """
         super().__init__(err)
         self.status_code = status_code
+
+
+class ComplianceError(Exception):
+    def __init__(self, report):
+        """
+        Image compliance error.
+        Args:
+            report: dict with numeric values and reasons
+        """
+        super().__init__("Image compliance check failed")
+        self.report = report

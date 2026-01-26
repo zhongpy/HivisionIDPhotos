@@ -15,6 +15,7 @@ from .human_matting import extract_human
 from .face_detector import detect_face_mtcnn
 from hivision.plugin.beauty.handler import beauty_face
 from .photo_adjuster import adjust_photo
+from .compliance import check_compliance
 import cv2
 import time
 
@@ -46,6 +47,7 @@ class IDCreator:
         self.matting_handler: ContextHandler = extract_human
         self.detection_handler: ContextHandler = detect_face_mtcnn
         self.beauty_handler: ContextHandler = beauty_face
+        self.compliance_handler: ContextHandler = check_compliance
         # 上下文
         self.ctx = None
 
@@ -180,6 +182,14 @@ class IDCreator:
             end_alignment_time = time.time()
             print(f"[3.1]  Face Alignment Time: {end_alignment_time - start_alignment_time:.3f}s")
 
+        # 3.2 ------------------合规检测------------------
+        if self.compliance_handler:
+            print("[3.2]  Start Compliance Check...")
+            start_compliance_time = time.time()
+            self.compliance_handler(ctx)
+            end_compliance_time = time.time()
+            print(f"[3.2]  Compliance Check Time: {end_compliance_time - start_compliance_time:.3f}s")
+
         # 4. ------------------图像调整------------------
         print("[4]  Start Image Post-Adjustment...")
         start_adjust_time = time.time()
@@ -197,6 +207,7 @@ class IDCreator:
             clothing_params=clothing_params,
             typography_params=typography_params,
             face=ctx.face,
+            compliance=ctx.compliance,
         )
         self.after_all and self.after_all(ctx)
 
