@@ -6,11 +6,25 @@
     "eye_ear_min": 0.18,
     "occlusion_ratio_min": 0.55,
     "skin_ratio_min": 0.40,
-    "glasses_ratio_min": 0.01,
-    "matting_head_coverage_min": 0.85,
-    "matting_top_coverage_min": 0.60
+    "glasses_ratio_min": 0.001,
+    "matting_head_coverage_min": 0.80,
+    "matting_top_coverage_min": 0.55
+  },
+  "matting": {
+    "head_box": {
+      "left": -0.15,
+      "right": 1.15,
+      "top": -0.40,
+      "bottom": 1.15
+    },
+    "top_fraction": 0.20
   },
   "models": {
+    "face_mesh": {
+      "min_detection_confidence": 0.3,
+      "min_tracking_confidence": 0.3,
+      "refine_landmarks": true
+    },
     "face_parsing": {
       "enabled": true,
       "model_path": "hivision/creator/weights/face_parsing_bisenet.onnx",
@@ -20,7 +34,7 @@
       "std": [0.229, 0.224, 0.225],
       "labels": {
         "skin": [1],
-        "eyeglass": [4]
+        "eyeglass": [6]
       }
     }
   }

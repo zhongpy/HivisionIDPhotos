@@ -15,8 +15,10 @@ from hivision.error import ComplianceError
 
 try:
     import mediapipe as mp
+    _MP_SOLUTIONS = getattr(mp, "solutions", None)
 except ImportError:  # pragma: no cover - handled at runtime
     mp = None
+    _MP_SOLUTIONS = None
 
 
 DEFAULT_CONFIG = {
@@ -41,7 +43,7 @@ DEFAULT_CONFIG = {
             "std": [0.229, 0.224, 0.225],
             "labels": {
                 "skin": [1],
-                "eyeglass": [4],
+                "eyeglass": [6],
             },
         }
     },
@@ -94,16 +96,24 @@ def _resolve_path(path_value: str) -> str:
 def _get_face_mesh():
     global _FACE_MESH
     if _FACE_MESH is None:
-        if mp is None:
-            raise ImportError(
-                "mediapipe is required for eye and occlusion checks. "
-                "Install with `pip install mediapipe`."
-            )
-        _FACE_MESH = mp.solutions.face_mesh.FaceMesh(
+        if _MP_SOLUTIONS is not None and hasattr(_MP_SOLUTIONS, "face_mesh"):
+            face_mesh_cls = _MP_SOLUTIONS.face_mesh.FaceMesh
+        else:
+            try:
+                from mediapipe.python.solutions.face_mesh import FaceMesh as face_mesh_cls
+            except Exception as exc:  # pragma: no cover - handled at runtime
+                raise ImportError(
+                    "mediapipe is required for eye and occlusion checks. "
+                    "Install with `pip install mediapipe`."
+                ) from exc
+        config = _load_config()
+        mesh_cfg = config.get("models", {}).get("face_mesh", {})
+        _FACE_MESH = face_mesh_cls(
             static_image_mode=True,
-            refine_landmarks=True,
+            refine_landmarks=bool(mesh_cfg.get("refine_landmarks", True)),
             max_num_faces=1,
-            min_detection_confidence=0.5,
+            min_detection_confidence=float(mesh_cfg.get("min_detection_confidence", 0.3)),
+            min_tracking_confidence=float(mesh_cfg.get("min_tracking_confidence", 0.3)),
         )
     return _FACE_MESH
 
@@ -221,6 +231,12 @@ def _sharpness_value(face_roi: np.ndarray) -> Optional[float]:
 def _ensure_bgr(image: np.ndarray) -> np.ndarray:
     if image is None:
         return None
+    if image.dtype != np.uint8:
+        max_value = float(np.max(image)) if image.size else 0.0
+        if max_value <= 1.0:
+            image = (image * 255.0).clip(0, 255).astype(np.uint8)
+        else:
+            image = image.clip(0, 255).astype(np.uint8)
     if image.ndim == 2:
         return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
     if image.shape[2] == 4:
@@ -233,16 +249,29 @@ def _landmarks_from_mesh(image: np.ndarray):
     image = _ensure_bgr(image)
     if image is None:
         return None
+    image = np.ascontiguousarray(image)
     candidates = [cv2.cvtColor(image, cv2.COLOR_BGR2RGB), image]
+    h, w = image.shape[:2]
+    if min(h, w) < 256:
+        scale = 256.0 / min(h, w)
+        new_w = int(round(w * scale))
+        new_h = int(round(h * scale))
+        resized = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+        candidates.extend([cv2.cvtColor(resized, cv2.COLOR_BGR2RGB), resized])
     for candidate in candidates:
         results = mesh.process(candidate)
         if not results.multi_face_landmarks:
             continue
         landmarks = results.multi_face_landmarks[0].landmark
-        h, w = image.shape[:2]
+        ch, cw = candidate.shape[:2]
         points = []
         for lm in landmarks:
-            points.append((lm.x * w, lm.y * h))
+            points.append((lm.x * cw, lm.y * ch))
+        # Map back to original scale if resized.
+        if (ch, cw) != (h, w):
+            scale_x = w / float(cw)
+            scale_y = h / float(ch)
+            points = [(x * scale_x, y * scale_y) for x, y in points]
         return points
     return None
 
@@ -261,8 +290,10 @@ def _eye_aspect_ratio(pts: list, idx: list) -> float:
     return float(num / den)
 
 
-def _eyes_open_value(image: np.ndarray) -> Optional[float]:
+def _eyes_open_value(image: np.ndarray, fallback_image: Optional[np.ndarray] = None) -> Optional[float]:
     pts = _landmarks_from_mesh(image)
+    if pts is None and fallback_image is not None:
+        pts = _landmarks_from_mesh(fallback_image)
     if pts is None:
         return None
     left_idx = [33, 160, 158, 133, 153, 144]
@@ -279,8 +310,11 @@ def _gradient_density(gray: np.ndarray, threshold: float = 20.0) -> float:
     return float(np.mean(mag > threshold))
 
 
-def _occlusion_ratio_value(image: np.ndarray) -> Optional[float]:
+def _occlusion_ratio_value(image: np.ndarray, fallback_image: Optional[np.ndarray] = None) -> Optional[float]:
     pts = _landmarks_from_mesh(image)
+    if pts is None and fallback_image is not None:
+        pts = _landmarks_from_mesh(fallback_image)
+        image = fallback_image if pts is not None else image
     if pts is None:
         return None
     gray = _to_gray(image)
@@ -348,7 +382,12 @@ def _face_parsing_metrics(face_roi: np.ndarray) -> Tuple[Optional[float], Option
     glasses_ratio = _ratio_for(eyeglass_labels) if eyeglass_labels else None
     return skin_ratio, glasses_ratio
 
-def _matting_head_coverage(matting_image: np.ndarray, face_rect: Tuple[float, float, float, float]) -> Tuple[Optional[float], Optional[float]]:
+def _matting_head_coverage(
+    matting_image: np.ndarray,
+    face_rect: Tuple[float, float, float, float],
+    box_factors: Optional[dict] = None,
+    top_fraction: Optional[float] = None,
+) -> Tuple[Optional[float], Optional[float]]:
     if (
         matting_image is None
         or matting_image.ndim != 3
@@ -358,17 +397,19 @@ def _matting_head_coverage(matting_image: np.ndarray, face_rect: Tuple[float, fl
         return None, None
     x, y, w, h = face_rect
     h_img, w_img = matting_image.shape[:2]
-    head_x0 = x - 0.2 * w
-    head_x1 = x + 1.2 * w
-    head_y0 = y - 0.6 * h
-    head_y1 = y + 1.2 * h
+    factors = box_factors or {"left": -0.2, "right": 1.2, "top": -0.6, "bottom": 1.2}
+    head_x0 = x + factors.get("left", -0.2) * w
+    head_x1 = x + factors.get("right", 1.2) * w
+    head_y0 = y + factors.get("top", -0.6) * h
+    head_y1 = y + factors.get("bottom", 1.2) * h
     x0, y0, x1, y1 = _clamp_box((head_x0, head_y0, head_x1, head_y1), w_img, h_img)
     if x1 <= x0 or y1 <= y0:
         return None, None
     alpha = matting_image[:, :, 3]
     head = alpha[y0:y1, x0:x1]
     head_coverage = float(np.mean(head > 0))
-    top_h = max(1, int((y1 - y0) * 0.25))
+    fraction = 0.25 if top_fraction is None else float(top_fraction)
+    top_h = max(1, int((y1 - y0) * fraction))
     top = alpha[y0:y0 + top_h, x0:x1]
     top_coverage = float(np.mean(top > 0))
     return head_coverage, top_coverage
@@ -410,7 +451,7 @@ def check_compliance(ctx: Context) -> Dict:
         report["reasons"].append("sharpness_low")
 
     try:
-        eyes_ear = _eyes_open_value(ctx.origin_image)
+        eyes_ear = _eyes_open_value(face_roi if face_roi is not None else ctx.origin_image, ctx.origin_image)
     except ImportError:
         eyes_ear = None
     eye_ear_min = thresholds.get("eye_ear_min", DEFAULT_CONFIG["thresholds"]["eye_ear_min"])
@@ -446,7 +487,7 @@ def check_compliance(ctx: Context) -> Dict:
         report["reasons"].append("glasses_detected_or_unknown")
 
     try:
-        occlusion_ratio = _occlusion_ratio_value(ctx.origin_image)
+        occlusion_ratio = _occlusion_ratio_value(face_roi if face_roi is not None else ctx.origin_image, ctx.origin_image)
     except ImportError:
         occlusion_ratio = None
     occlusion_ratio_min = thresholds.get("occlusion_ratio_min", DEFAULT_CONFIG["thresholds"]["occlusion_ratio_min"])
@@ -473,7 +514,14 @@ def check_compliance(ctx: Context) -> Dict:
     if not occlusion_ok:
         report["reasons"].append("facial_features_occluded_or_unknown")
 
-    head_coverage, top_coverage = _matting_head_coverage(ctx.matting_image, face_rect)
+    head_box = config.get("matting", {}).get("head_box")
+    top_fraction = config.get("matting", {}).get("top_fraction")
+    head_coverage, top_coverage = _matting_head_coverage(
+        ctx.matting_image,
+        face_rect,
+        box_factors=head_box,
+        top_fraction=top_fraction,
+    )
     matting_head_min = thresholds.get("matting_head_coverage_min", DEFAULT_CONFIG["thresholds"]["matting_head_coverage_min"])
     matting_top_min = thresholds.get("matting_top_coverage_min", DEFAULT_CONFIG["thresholds"]["matting_top_coverage_min"])
     head_ok = head_coverage is not None and head_coverage >= matting_head_min

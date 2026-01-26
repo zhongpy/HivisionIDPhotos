@@ -377,7 +377,9 @@ def create_ui(
                     label=LOCALES["notification"][DEFAULT_LANG]["label"], visible=False
                 )
                 compliance_report = gr.JSON(
-                    label=LOCALES["compliance_report"][DEFAULT_LANG]["label"],
+                    label=LOCALES.get("compliance_report", {})
+                    .get(DEFAULT_LANG, {})
+                    .get("label", "Compliance report"),
                     value=None,
                 )
                 with gr.Row():
@@ -457,7 +459,9 @@ def create_ui(
                         value=LOCALES["render_mode"][language]["choices"][0],
                     ),
                     compliance_report: gr.update(
-                        label=LOCALES["compliance_report"][language]["label"]
+                        label=LOCALES.get("compliance_report", {})
+                        .get(language, {})
+                        .get("label", "Compliance report")
                     ),
                     image_kb_options: gr.update(
                         label=LOCALES["image_kb_size"][language]["label"],
