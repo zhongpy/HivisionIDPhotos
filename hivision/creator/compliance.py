@@ -4,8 +4,11 @@ r"""
 Offline image compliance checks.
 """
 from typing import Dict, Tuple, Optional
+import json
+import os
 import cv2
 import numpy as np
+import onnxruntime
 
 from .context import Context
 from hivision.error import ComplianceError
@@ -16,17 +19,76 @@ except ImportError:  # pragma: no cover - handled at runtime
     mp = None
 
 
-DEFAULT_THRESHOLDS = {
-    "brightness_min": 80.0,
-    "brightness_max": 200.0,
-    "sharpness_min": 80.0,
-    "eye_ear_min": 0.18,
-    "occlusion_ratio_min": 0.55,
-    "matting_head_coverage_min": 0.85,
-    "matting_top_coverage_min": 0.60,
+DEFAULT_CONFIG = {
+    "thresholds": {
+        "brightness_min": 80.0,
+        "brightness_max": 200.0,
+        "sharpness_min": 80.0,
+        "eye_ear_min": 0.18,
+        "occlusion_ratio_min": 0.55,
+        "skin_ratio_min": 0.40,
+        "glasses_ratio_min": 0.01,
+        "matting_head_coverage_min": 0.85,
+        "matting_top_coverage_min": 0.60,
+    },
+    "models": {
+        "face_parsing": {
+            "enabled": True,
+            "model_path": "hivision/creator/weights/face_parsing_bisenet.onnx",
+            "input_size": 512,
+            "color_order": "RGB",
+            "mean": [0.485, 0.456, 0.406],
+            "std": [0.229, 0.224, 0.225],
+            "labels": {
+                "skin": [1],
+                "eyeglass": [4],
+            },
+        }
+    },
 }
 
 _FACE_MESH = None
+_FACE_PARSING = None
+_CONFIG_CACHE = None
+
+CONFIG_PATH_ENV = "HIVISION_COMPLIANCE_CONFIG"
+
+
+def _deep_update(dst: dict, src: dict) -> dict:
+    for key, value in src.items():
+        if isinstance(value, dict) and isinstance(dst.get(key), dict):
+            dst[key] = _deep_update(dst[key], value)
+        else:
+            dst[key] = value
+    return dst
+
+
+def _load_config() -> dict:
+    global _CONFIG_CACHE
+    if _CONFIG_CACHE is not None:
+        return _CONFIG_CACHE
+    config = json.loads(json.dumps(DEFAULT_CONFIG))
+    root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    default_path = os.path.join(root_dir, "config", "compliance.json")
+    config_path = os.getenv(CONFIG_PATH_ENV, default_path)
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as handle:
+                user_config = json.load(handle)
+            config = _deep_update(config, user_config)
+        except (OSError, json.JSONDecodeError):
+            pass
+    _CONFIG_CACHE = config
+    return config
+
+
+def _resolve_path(path_value: str) -> str:
+    if not path_value:
+        return ""
+    if os.path.isabs(path_value):
+        return path_value
+    root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    return os.path.join(root_dir, path_value)
 
 
 def _get_face_mesh():
@@ -44,6 +106,69 @@ def _get_face_mesh():
             min_detection_confidence=0.5,
         )
     return _FACE_MESH
+
+
+class FaceParsingModel:
+    def __init__(self, config: dict):
+        self.enabled = bool(config.get("enabled", False))
+        self.model_path = _resolve_path(config.get("model_path", ""))
+        self.input_size = int(config.get("input_size", 512))
+        self.color_order = config.get("color_order", "RGB").upper()
+        self.mean = np.array(config.get("mean", [0.485, 0.456, 0.406]), dtype=np.float32)
+        self.std = np.array(config.get("std", [0.229, 0.224, 0.225]), dtype=np.float32)
+        self.labels = config.get("labels", {})
+        self.session = None
+        self.input_name = None
+
+    def available(self) -> bool:
+        return self.enabled and bool(self.model_path) and os.path.exists(self.model_path)
+
+    def load(self):
+        if self.session is not None:
+            return
+        if not self.available():
+            return
+        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        try:
+            self.session = onnxruntime.InferenceSession(self.model_path, providers=providers)
+        except Exception:
+            self.session = onnxruntime.InferenceSession(
+                self.model_path, providers=["CPUExecutionProvider"]
+            )
+        self.input_name = self.session.get_inputs()[0].name
+
+    def predict(self, face_roi: np.ndarray) -> Optional[np.ndarray]:
+        if face_roi is None:
+            return None
+        self.load()
+        if self.session is None:
+            return None
+        bgr = _ensure_bgr(face_roi)
+        resized = cv2.resize(bgr, (self.input_size, self.input_size), interpolation=cv2.INTER_AREA)
+        if self.color_order == "RGB":
+            resized = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+        img = resized.astype(np.float32) / 255.0
+        img = (img - self.mean) / self.std
+        img = img.transpose(2, 0, 1)[None, ...]
+        outputs = self.session.run(None, {self.input_name: img})
+        if not outputs:
+            return None
+        logits = outputs[0]
+        if logits.ndim == 4:
+            mask = np.argmax(logits, axis=1)[0]
+        elif logits.ndim == 3:
+            mask = np.argmax(logits, axis=0)
+        else:
+            return None
+        return mask
+
+
+def _get_face_parsing() -> FaceParsingModel:
+    global _FACE_PARSING
+    if _FACE_PARSING is None:
+        config = _load_config()
+        _FACE_PARSING = FaceParsingModel(config.get("models", {}).get("face_parsing", {}))
+    return _FACE_PARSING
 
 
 def _clamp_box(box: Tuple[int, int, int, int], width: int, height: int) -> Tuple[int, int, int, int]:
@@ -198,6 +323,31 @@ def _glasses_count(face_roi: np.ndarray) -> Optional[int]:
     return int(len(eyes))
 
 
+def _face_parsing_metrics(face_roi: np.ndarray) -> Tuple[Optional[float], Optional[float]]:
+    parser = _get_face_parsing()
+    if not parser.available():
+        return None, None
+    mask = parser.predict(face_roi)
+    if mask is None:
+        return None, None
+    h, w = mask.shape[:2]
+    total = float(h * w)
+    labels = parser.labels or {}
+    skin_labels = labels.get("skin", [])
+    eyeglass_labels = labels.get("eyeglass", [])
+
+    def _ratio_for(label_list):
+        if not label_list:
+            return 0.0
+        counts = 0
+        for label in label_list:
+            counts += int(np.sum(mask == int(label)))
+        return float(counts) / total if total > 0 else 0.0
+
+    skin_ratio = _ratio_for(skin_labels) if skin_labels else None
+    glasses_ratio = _ratio_for(eyeglass_labels) if eyeglass_labels else None
+    return skin_ratio, glasses_ratio
+
 def _matting_head_coverage(matting_image: np.ndarray, face_rect: Tuple[float, float, float, float]) -> Tuple[Optional[float], Optional[float]]:
     if (
         matting_image is None
@@ -225,30 +375,35 @@ def _matting_head_coverage(matting_image: np.ndarray, face_rect: Tuple[float, fl
 
 
 def check_compliance(ctx: Context) -> Dict:
+    config = _load_config()
+    thresholds = config.get("thresholds", {})
     report = {"status": True, "items": {}, "reasons": []}
     face_rect = ctx.face.get("rectangle") if ctx.face else None
     face_roi = _face_roi(ctx.origin_image, face_rect)
 
     brightness = _brightness_value(face_roi)
-    brightness_ok = brightness is not None and DEFAULT_THRESHOLDS["brightness_min"] <= brightness <= DEFAULT_THRESHOLDS["brightness_max"]
+    brightness_min = thresholds.get("brightness_min", DEFAULT_CONFIG["thresholds"]["brightness_min"])
+    brightness_max = thresholds.get("brightness_max", DEFAULT_CONFIG["thresholds"]["brightness_max"])
+    brightness_ok = brightness is not None and brightness_min <= brightness <= brightness_max
     report["items"]["brightness"] = {
         "value": brightness,
         "ok": brightness_ok,
         "thresholds": {
-            "min": DEFAULT_THRESHOLDS["brightness_min"],
-            "max": DEFAULT_THRESHOLDS["brightness_max"],
+            "min": brightness_min,
+            "max": brightness_max,
         },
     }
     if not brightness_ok:
         report["reasons"].append("brightness_out_of_range")
 
     sharpness = _sharpness_value(face_roi)
-    sharpness_ok = sharpness is not None and sharpness >= DEFAULT_THRESHOLDS["sharpness_min"]
+    sharpness_min = thresholds.get("sharpness_min", DEFAULT_CONFIG["thresholds"]["sharpness_min"])
+    sharpness_ok = sharpness is not None and sharpness >= sharpness_min
     report["items"]["sharpness"] = {
         "value": sharpness,
         "ok": sharpness_ok,
         "thresholds": {
-            "min": DEFAULT_THRESHOLDS["sharpness_min"],
+            "min": sharpness_min,
         },
     }
     if not sharpness_ok:
@@ -258,25 +413,34 @@ def check_compliance(ctx: Context) -> Dict:
         eyes_ear = _eyes_open_value(ctx.origin_image)
     except ImportError:
         eyes_ear = None
-    eyes_ok = eyes_ear is not None and eyes_ear >= DEFAULT_THRESHOLDS["eye_ear_min"]
+    eye_ear_min = thresholds.get("eye_ear_min", DEFAULT_CONFIG["thresholds"]["eye_ear_min"])
+    eyes_ok = eyes_ear is not None and eyes_ear >= eye_ear_min
     report["items"]["eyes_open"] = {
         "value": eyes_ear,
         "ok": eyes_ok,
         "thresholds": {
-            "min": DEFAULT_THRESHOLDS["eye_ear_min"],
+            "min": eye_ear_min,
         },
     }
     if not eyes_ok:
         report["reasons"].append("eyes_closed_or_unknown")
 
-    glasses_count = _glasses_count(face_roi)
-    glasses_ok = glasses_count is not None and glasses_count == 0
+    parsing_skin_ratio, parsing_glasses_ratio = _face_parsing_metrics(face_roi)
+    glasses_ratio_min = thresholds.get("glasses_ratio_min", DEFAULT_CONFIG["thresholds"]["glasses_ratio_min"])
+    glasses_ok = None
+    glasses_count = None
+    if parsing_glasses_ratio is not None:
+        glasses_ok = parsing_glasses_ratio < glasses_ratio_min
+    else:
+        glasses_count = _glasses_count(face_roi)
+        glasses_ok = glasses_count is not None and glasses_count == 0
     report["items"]["glasses"] = {
-        "value": glasses_count,
+        "value": parsing_glasses_ratio if parsing_glasses_ratio is not None else glasses_count,
         "ok": glasses_ok,
         "thresholds": {
-            "max": 0,
+            "max": 0 if parsing_glasses_ratio is None else glasses_ratio_min,
         },
+        "source": "face_parsing" if parsing_glasses_ratio is not None else "haar",
     }
     if not glasses_ok:
         report["reasons"].append("glasses_detected_or_unknown")
@@ -285,32 +449,47 @@ def check_compliance(ctx: Context) -> Dict:
         occlusion_ratio = _occlusion_ratio_value(ctx.origin_image)
     except ImportError:
         occlusion_ratio = None
-    occlusion_ok = occlusion_ratio is not None and occlusion_ratio >= DEFAULT_THRESHOLDS["occlusion_ratio_min"]
+    occlusion_ratio_min = thresholds.get("occlusion_ratio_min", DEFAULT_CONFIG["thresholds"]["occlusion_ratio_min"])
+    skin_ratio_min = thresholds.get("skin_ratio_min", DEFAULT_CONFIG["thresholds"]["skin_ratio_min"])
+    occlusion_ok = None
+    if parsing_skin_ratio is not None:
+        occlusion_ok = parsing_skin_ratio >= skin_ratio_min
+        occlusion_value = parsing_skin_ratio
+        occlusion_source = "face_parsing"
+        occlusion_threshold = skin_ratio_min
+    else:
+        occlusion_ok = occlusion_ratio is not None and occlusion_ratio >= occlusion_ratio_min
+        occlusion_value = occlusion_ratio
+        occlusion_source = "gradient"
+        occlusion_threshold = occlusion_ratio_min
     report["items"]["occlusion"] = {
-        "value": occlusion_ratio,
+        "value": occlusion_value,
         "ok": occlusion_ok,
         "thresholds": {
-            "min": DEFAULT_THRESHOLDS["occlusion_ratio_min"],
+            "min": occlusion_threshold,
         },
+        "source": occlusion_source,
     }
     if not occlusion_ok:
         report["reasons"].append("facial_features_occluded_or_unknown")
 
     head_coverage, top_coverage = _matting_head_coverage(ctx.matting_image, face_rect)
-    head_ok = head_coverage is not None and head_coverage >= DEFAULT_THRESHOLDS["matting_head_coverage_min"]
-    top_ok = top_coverage is not None and top_coverage >= DEFAULT_THRESHOLDS["matting_top_coverage_min"]
+    matting_head_min = thresholds.get("matting_head_coverage_min", DEFAULT_CONFIG["thresholds"]["matting_head_coverage_min"])
+    matting_top_min = thresholds.get("matting_top_coverage_min", DEFAULT_CONFIG["thresholds"]["matting_top_coverage_min"])
+    head_ok = head_coverage is not None and head_coverage >= matting_head_min
+    top_ok = top_coverage is not None and top_coverage >= matting_top_min
     report["items"]["matting_head_coverage"] = {
         "value": head_coverage,
         "ok": head_ok,
         "thresholds": {
-            "min": DEFAULT_THRESHOLDS["matting_head_coverage_min"],
+            "min": matting_head_min,
         },
     }
     report["items"]["matting_top_coverage"] = {
         "value": top_coverage,
         "ok": top_ok,
         "thresholds": {
-            "min": DEFAULT_THRESHOLDS["matting_top_coverage_min"],
+            "min": matting_top_min,
         },
     }
     if not head_ok or not top_ok:

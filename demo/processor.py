@@ -1,4 +1,3 @@
-import json
 import numpy as np
 from hivision import IDCreator
 from hivision.error import FaceError, APIError, ComplianceError
@@ -329,6 +328,7 @@ class IDPhotoProcessor:
             gr.update(visible=False),
             gr.update(value=None),
             gr.update(value=None),
+            gr.update(value=None),
             gr.update(
                 value=LOCALES["notification"][language]["face_error"], visible=True
             ),
@@ -336,12 +336,12 @@ class IDPhotoProcessor:
 
     def _handle_compliance_error(self, language, report):
         """处理合规检测错误"""
-        report_text = json.dumps(report, ensure_ascii=False)
         return [gr.update(value=None) for _ in range(4)] + [
             gr.update(visible=False),
             gr.update(value=None),
             gr.update(value=None),
-            gr.update(value=report_text, visible=True),
+            gr.update(value=report),
+            gr.update(value="Compliance check failed.", visible=True),
         ]
 
     # 处理生成的照片
@@ -416,6 +416,7 @@ class IDPhotoProcessor:
             gr.update(value=result_image_layout, visible=result_image_layout_visible),
             gr.update(value=result_image_template, visible=result_image_template_visible),
             gr.update(visible = result_image_template_visible),
+            result.compliance,
         )
 
     # 渲染背景
@@ -669,6 +670,7 @@ class IDPhotoProcessor:
         result_layout_image_gr,
         result_image_template_gr,
         result_image_template_accordion_gr,
+        compliance_report,
     ):    
         """创建响应"""
         response = [
@@ -679,6 +681,7 @@ class IDPhotoProcessor:
             result_layout_image_gr,
             result_image_template_gr,
             result_image_template_accordion_gr,
+            gr.update(value=compliance_report),
             gr.update(visible=False),
         ]
 
@@ -688,8 +691,10 @@ class IDPhotoProcessor:
         """创建错误响应"""
         return [gr.update(value=None) for _ in range(4)] + [
             None,
+            gr.update(value=None),
+            gr.update(value=None),
+            gr.update(value=None),
             gr.update(
                 value=LOCALES["size_mode"][language]["custom_size_eror"], visible=True
             ),
-            None,
         ]
