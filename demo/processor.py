@@ -159,6 +159,8 @@ class IDPhotoProcessor:
             return self._handle_compliance_error(language, exc.report)
 
         # 后处理生成的照片
+        roi_overlay = self._draw_roi_overlay(input_image, result.compliance)
+
         return self._process_generated_photo(
             result,
             idphoto_json,
@@ -170,6 +172,7 @@ class IDPhotoProcessor:
             watermark_text_angle,
             watermark_text_space,
             watermark_text_color,
+            roi_overlay,
         )
 
     # 初始化idphoto_json字典
@@ -324,7 +327,7 @@ class IDPhotoProcessor:
     # 处理照片生成错误
     def _handle_photo_generation_error(self, language):
         """处理照片生成错误"""
-        return [gr.update(value=None) for _ in range(4)] + [
+        return [gr.update(value=None)] + [gr.update(value=None) for _ in range(4)] + [
             gr.update(visible=False),
             gr.update(value=None),
             gr.update(value=None),
@@ -336,7 +339,7 @@ class IDPhotoProcessor:
 
     def _handle_compliance_error(self, language, report):
         """处理合规检测错误"""
-        return [gr.update(value=None) for _ in range(4)] + [
+        return [gr.update(value=None)] + [gr.update(value=None) for _ in range(4)] + [
             gr.update(visible=False),
             gr.update(value=None),
             gr.update(value=None),
@@ -357,6 +360,7 @@ class IDPhotoProcessor:
         watermark_text_angle,
         watermark_text_space,
         watermark_text_color,
+        roi_overlay,
     ):
         """处理生成的照片"""
         result_image_standard, result_image_hd, _, _, _, _ = result
@@ -417,6 +421,7 @@ class IDPhotoProcessor:
             gr.update(value=result_image_template, visible=result_image_template_visible),
             gr.update(visible = result_image_template_visible),
             result.compliance,
+            roi_overlay,
         )
 
     # 渲染背景
@@ -671,9 +676,11 @@ class IDPhotoProcessor:
         result_image_template_gr,
         result_image_template_accordion_gr,
         compliance_report,
+        roi_overlay,
     ):    
         """创建响应"""
         response = [
+            gr.update(value=roi_overlay),
             result_image_standard,
             result_image_hd,
             result_image_standard_png,
@@ -687,9 +694,51 @@ class IDPhotoProcessor:
 
         return response
 
+    def _draw_roi_overlay(self, image, compliance_report):
+        if image is None or compliance_report is None:
+            return None
+        report = compliance_report.get("pre") if isinstance(compliance_report, dict) else None
+        if report is None:
+            report = compliance_report
+        debug = report.get("debug") if isinstance(report, dict) else None
+        if not debug:
+            return image
+        face_box = debug.get("face_box")
+        parsing_box = debug.get("parsing_box")
+        origin_shape = debug.get("origin_shape")
+        if face_box is None and parsing_box is None:
+            return image
+        overlay = image.copy()
+        if overlay.ndim == 2:
+            overlay = cv2.cvtColor(overlay, cv2.COLOR_GRAY2BGR)
+        if overlay.shape[2] == 4:
+            overlay = cv2.cvtColor(overlay, cv2.COLOR_BGRA2BGR)
+        scale_x = 1.0
+        scale_y = 1.0
+        if origin_shape and len(origin_shape) >= 2:
+            oh, ow = origin_shape[0], origin_shape[1]
+            if ow and oh:
+                scale_x = overlay.shape[1] / float(ow)
+                scale_y = overlay.shape[0] / float(oh)
+        if face_box is not None:
+            x0, y0, x1, y1 = [int(v) for v in face_box]
+            x0 = int(round(x0 * scale_x))
+            x1 = int(round(x1 * scale_x))
+            y0 = int(round(y0 * scale_y))
+            y1 = int(round(y1 * scale_y))
+            cv2.rectangle(overlay, (x0, y0), (x1, y1), (0, 255, 0), 2)
+        if parsing_box is not None:
+            x0, y0, x1, y1 = [int(v) for v in parsing_box]
+            x0 = int(round(x0 * scale_x))
+            x1 = int(round(x1 * scale_x))
+            y0 = int(round(y0 * scale_y))
+            y1 = int(round(y1 * scale_y))
+            cv2.rectangle(overlay, (x0, y0), (x1, y1), (0, 0, 255), 2)
+        return overlay
+
     def _create_error_response(self, language):
         """创建错误响应"""
-        return [gr.update(value=None) for _ in range(4)] + [
+        return [gr.update(value=None)] + [gr.update(value=None) for _ in range(4)] + [
             None,
             gr.update(value=None),
             gr.update(value=None),

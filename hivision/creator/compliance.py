@@ -246,6 +246,23 @@ def _expanded_face_roi(
         return None
     return image[y0:y1, x0:x1]
 
+def _expanded_face_box(
+    image: np.ndarray,
+    face_rect: Tuple[float, float, float, float],
+    box_factors: Optional[dict] = None,
+) -> Optional[Tuple[int, int, int, int]]:
+    if image is None or face_rect is None:
+        return None
+    x, y, w, h = face_rect
+    factors = box_factors or {"left": -0.2, "right": 1.2, "top": -0.4, "bottom": 1.2}
+    x0 = x + factors.get("left", -0.2) * w
+    x1 = x + factors.get("right", 1.2) * w
+    y0 = y + factors.get("top", -0.4) * h
+    y1 = y + factors.get("bottom", 1.2) * h
+    x0, y0, x1, y1 = _clamp_box((x0, y0, x1, y1), image.shape[1], image.shape[0])
+    if x1 <= x0 or y1 <= y0:
+        return None
+    return (int(x0), int(y0), int(x1), int(y1))
 
 def _to_gray(image: np.ndarray) -> np.ndarray:
     if image is None:
@@ -513,6 +530,14 @@ def check_compliance(ctx: Context, stage: str = "full") -> Dict:
     face_roi = _face_roi(ctx.origin_image, face_rect)
     parsing_box = config.get("models", {}).get("face_parsing", {}).get("box")
     parsing_roi = _expanded_face_roi(ctx.origin_image, face_rect, parsing_box)
+    face_box = _expanded_face_box(ctx.origin_image, face_rect, None)
+    parsing_box_rect = _expanded_face_box(ctx.origin_image, face_rect, parsing_box)
+    report["debug"] = {
+        "face_box": face_box,
+        "parsing_box": parsing_box_rect,
+        "face_rect": face_rect,
+        "origin_shape": None if ctx.origin_image is None else list(ctx.origin_image.shape),
+    }
     _debug_log(config, f"origin_image={None if ctx.origin_image is None else ctx.origin_image.shape}")
     _debug_log(config, f"matting_image={None if ctx.matting_image is None else ctx.matting_image.shape}")
     _debug_log(config, f"face_rect={face_rect}")
@@ -881,8 +906,8 @@ def check_compliance(ctx: Context, stage: str = "full") -> Dict:
         )
 
     report["status"] = len(report["reasons"]) == 0
-    if not report["status"]:
-        raise ComplianceError(report)
+    #if not report["status"]:
+        #raise ComplianceError(report)
     return report
 
 

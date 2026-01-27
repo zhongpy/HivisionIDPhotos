@@ -382,6 +382,11 @@ def create_ui(
                     .get("label", "Compliance report"),
                     value=None,
                 )
+                img_output_debug = gr.Image(
+                    label="ROI Debug",
+                    height=350,
+                    format="png",
+                )
                 with gr.Row():
                     # 标准照
                     img_output_standard = gr.Image(
@@ -778,6 +783,7 @@ def create_ui(
                     print_options,
                 ],
                 outputs=[
+                    img_output_debug,
                     img_output_standard,
                     img_output_standard_hd,
                     img_output_standard_png,
