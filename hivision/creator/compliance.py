@@ -29,7 +29,7 @@ DEFAULT_CONFIG = {
         "sharpness_min": 80.0,
         "sharpness_min_tenengrad": 1000.0,
         "eye_ear_min": 0.18,
-        "eye_area_ratio_min": 0.004,
+        "eye_area_ratio_min": 0.003,
         "occlusion_ratio_min": 0.55,
         "skin_ratio_min": 0.40,
         "glasses_ratio_min": 0.001,
