@@ -32,7 +32,8 @@ DEFAULT_CONFIG = {
         "occlusion_ratio_min": 0.55,
         "skin_ratio_min": 0.40,
         "glasses_ratio_min": 0.001,
-        "mouth_ratio_max": 0.03,
+        "mouth_total_ratio_max": 0.04,
+        "mouth_open_ratio_max": 0.35,
         "hat_ratio_max": 0.001,
         "earring_ratio_max": 0.0005,
         "neck_ratio_min": 0.01,
@@ -58,7 +59,8 @@ DEFAULT_CONFIG = {
                 "eyeglass": [3],
                 "left_eye": [4],
                 "right_eye": [5],
-                "mouth": [10, 11, 12],
+                "mouth_inner": [10],
+                "mouth_lip": [11, 12],
                 "hair": [13],
                 "hat": [14],
                 "earring": [15],
@@ -417,7 +419,8 @@ def _face_parsing_metrics(
     eyeglass_labels = labels.get("eyeglass", [])
     left_eye_labels = labels.get("left_eye", [])
     right_eye_labels = labels.get("right_eye", [])
-    mouth_labels = labels.get("mouth", [])
+    mouth_inner_labels = labels.get("mouth_inner", [])
+    mouth_lip_labels = labels.get("mouth_lip", [])
     hair_labels = labels.get("hair", [])
     hat_labels = labels.get("hat", [])
     earring_labels = labels.get("earring", [])
@@ -439,8 +442,11 @@ def _face_parsing_metrics(
     eye_ratio = None
     if left_eye_labels or right_eye_labels:
         eye_ratio = _ratio_for(left_eye_labels + right_eye_labels)
+    mouth_inner_ratio = _ratio_for(mouth_inner_labels) if mouth_inner_labels else None
+    mouth_lip_ratio = _ratio_for(mouth_lip_labels) if mouth_lip_labels else None
     extra = {
-        "mouth_ratio": _ratio_for(mouth_labels) if mouth_labels else None,
+        "mouth_inner_ratio": mouth_inner_ratio,
+        "mouth_lip_ratio": mouth_lip_ratio,
         "hair_ratio": _ratio_for(hair_labels) if hair_labels else None,
         "hat_ratio": _ratio_for(hat_labels) if hat_labels else None,
         "earring_ratio": _ratio_for(earring_labels) if earring_labels else None,
@@ -639,18 +645,48 @@ def check_compliance(ctx: Context, stage: str = "full") -> Dict:
             f"occlusion_value={occlusion_value} ok={occlusion_ok} min={occlusion_threshold} source={occlusion_source}",
         )
 
-        mouth_ratio = parsing_extra.get("mouth_ratio") if parsing_extra else None
-        mouth_ratio_max = thresholds.get("mouth_ratio_max", DEFAULT_CONFIG["thresholds"]["mouth_ratio_max"])
-        mouth_ok = mouth_ratio is not None and mouth_ratio <= mouth_ratio_max
+        mouth_inner_ratio = parsing_extra.get("mouth_inner_ratio") if parsing_extra else None
+        mouth_lip_ratio = parsing_extra.get("mouth_lip_ratio") if parsing_extra else None
+        mouth_total_ratio = None
+        mouth_open_ratio = None
+        if mouth_inner_ratio is not None and mouth_lip_ratio is not None:
+            mouth_total_ratio = mouth_inner_ratio + mouth_lip_ratio
+            denom = mouth_total_ratio if mouth_total_ratio > 1e-6 else 1e-6
+            mouth_open_ratio = mouth_inner_ratio / denom
+        mouth_total_ratio_max = thresholds.get(
+            "mouth_total_ratio_max", DEFAULT_CONFIG["thresholds"]["mouth_total_ratio_max"]
+        )
+        mouth_open_ratio_max = thresholds.get(
+            "mouth_open_ratio_max", DEFAULT_CONFIG["thresholds"]["mouth_open_ratio_max"]
+        )
+        mouth_ok = (
+            mouth_total_ratio is not None
+            and mouth_open_ratio is not None
+            and mouth_total_ratio <= mouth_total_ratio_max
+            and mouth_open_ratio <= mouth_open_ratio_max
+        )
         report["items"]["mouth"] = {
-            "value": mouth_ratio,
+            "value": {
+                "inner": mouth_inner_ratio,
+                "lip": mouth_lip_ratio,
+                "total": mouth_total_ratio,
+                "open_ratio": mouth_open_ratio,
+            },
             "ok": mouth_ok,
-            "thresholds": {"max": mouth_ratio_max},
+            "thresholds": {
+                "total_max": mouth_total_ratio_max,
+                "open_ratio_max": mouth_open_ratio_max,
+            },
             "source": "face_parsing",
         }
         if not mouth_ok:
             report["reasons"].append("mouth_open_or_unknown")
-        _debug_log(config, f"mouth_ratio={mouth_ratio} ok={mouth_ok} max={mouth_ratio_max}")
+        _debug_log(
+            config,
+            f"mouth_inner={mouth_inner_ratio} lip={mouth_lip_ratio} total={mouth_total_ratio} "
+            f"open_ratio={mouth_open_ratio} ok={mouth_ok} total_max={mouth_total_ratio_max} "
+            f"open_ratio_max={mouth_open_ratio_max}",
+        )
 
         hat_ratio = parsing_extra_wide.get("hat_ratio") if parsing_extra_wide else None
         hair_ratio = parsing_extra_wide.get("hair_ratio") if parsing_extra_wide else None
