@@ -9,6 +9,11 @@
     "occlusion_ratio_min": 0.55,
     "skin_ratio_min": 0.40,
     "glasses_ratio_min": 0.001,
+    "mouth_ratio_max": 0.03,
+    "hat_ratio_max": 0.001,
+    "earring_ratio_max": 0.0005,
+    "neck_ratio_min": 0.01,
+    "cloth_ratio_min": 0.02,
     "matting_head_coverage_min": 0.80,
     "matting_top_coverage_min": 0.60
   },
@@ -38,7 +43,12 @@
         "skin": [1],
         "eyeglass": [3],
         "left_eye": [4],
-        "right_eye": [5]
+        "right_eye": [5],
+        "mouth": [10, 11, 12],
+        "hat": [14],
+        "earring": [15],
+        "neck": [16, 17],
+        "cloth": [18]
       }
     }
   }

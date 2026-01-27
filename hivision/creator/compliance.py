@@ -32,6 +32,11 @@ DEFAULT_CONFIG = {
         "occlusion_ratio_min": 0.55,
         "skin_ratio_min": 0.40,
         "glasses_ratio_min": 0.001,
+        "mouth_ratio_max": 0.03,
+        "hat_ratio_max": 0.001,
+        "earring_ratio_max": 0.0005,
+        "neck_ratio_min": 0.01,
+        "cloth_ratio_min": 0.02,
         "matting_head_coverage_min": 0.80,
         "matting_top_coverage_min": 0.60
     },
@@ -47,7 +52,12 @@ DEFAULT_CONFIG = {
                 "skin": [1],
                 "eyeglass": [3],
                 "left_eye": [4],
-                "right_eye": [5]
+                "right_eye": [5],
+                "mouth": [10, 11, 12],
+                "hat": [14],
+                "earring": [15],
+                "neck": [16, 17],
+                "cloth": [18]
             }
         }
     },
@@ -365,13 +375,15 @@ def _glasses_count(face_roi: np.ndarray) -> Optional[int]:
     return int(len(eyes))
 
 
-def _face_parsing_metrics(face_roi: np.ndarray) -> Tuple[Optional[float], Optional[float]]:
+def _face_parsing_metrics(
+    face_roi: np.ndarray,
+) -> Tuple[Optional[float], Optional[float], Optional[float], dict]:
     parser = _get_face_parsing()
     if not parser.available():
-        return None, None
+        return None, None, None, {}
     mask = parser.predict(face_roi)
     if mask is None:
-        return None, None
+        return None, None, None, {}
     h, w = mask.shape[:2]
     total = float(h * w)
     labels = parser.labels or {}
@@ -379,6 +391,11 @@ def _face_parsing_metrics(face_roi: np.ndarray) -> Tuple[Optional[float], Option
     eyeglass_labels = labels.get("eyeglass", [])
     left_eye_labels = labels.get("left_eye", [])
     right_eye_labels = labels.get("right_eye", [])
+    mouth_labels = labels.get("mouth", [])
+    hat_labels = labels.get("hat", [])
+    earring_labels = labels.get("earring", [])
+    neck_labels = labels.get("neck", [])
+    cloth_labels = labels.get("cloth", [])
 
     def _ratio_for(label_list):
         if not label_list:
@@ -393,7 +410,14 @@ def _face_parsing_metrics(face_roi: np.ndarray) -> Tuple[Optional[float], Option
     eye_ratio = None
     if left_eye_labels or right_eye_labels:
         eye_ratio = _ratio_for(left_eye_labels + right_eye_labels)
-    return skin_ratio, glasses_ratio, eye_ratio
+    extra = {
+        "mouth_ratio": _ratio_for(mouth_labels) if mouth_labels else None,
+        "hat_ratio": _ratio_for(hat_labels) if hat_labels else None,
+        "earring_ratio": _ratio_for(earring_labels) if earring_labels else None,
+        "neck_ratio": _ratio_for(neck_labels) if neck_labels else None,
+        "cloth_ratio": _ratio_for(cloth_labels) if cloth_labels else None,
+    }
+    return skin_ratio, glasses_ratio, eye_ratio, extra
 
 def _matting_head_coverage(
     matting_image: np.ndarray,
@@ -473,7 +497,7 @@ def check_compliance(ctx: Context, stage: str = "full") -> Dict:
             report["reasons"].append("sharpness_low")
         _debug_log(config, f"sharpness={sharpness} ok={sharpness_ok} min={sharpness_min}")
 
-        parsing_skin_ratio, parsing_glasses_ratio, parsing_eye_ratio = _face_parsing_metrics(face_roi)
+        parsing_skin_ratio, parsing_glasses_ratio, parsing_eye_ratio, parsing_extra = _face_parsing_metrics(face_roi)
 
         try:
             eyes_ear = _eyes_open_value(
@@ -570,6 +594,71 @@ def check_compliance(ctx: Context, stage: str = "full") -> Dict:
             config,
             f"occlusion_value={occlusion_value} ok={occlusion_ok} min={occlusion_threshold} source={occlusion_source}",
         )
+
+        mouth_ratio = parsing_extra.get("mouth_ratio") if parsing_extra else None
+        mouth_ratio_max = thresholds.get("mouth_ratio_max", DEFAULT_CONFIG["thresholds"]["mouth_ratio_max"])
+        mouth_ok = mouth_ratio is not None and mouth_ratio <= mouth_ratio_max
+        report["items"]["mouth"] = {
+            "value": mouth_ratio,
+            "ok": mouth_ok,
+            "thresholds": {"max": mouth_ratio_max},
+            "source": "face_parsing",
+        }
+        if not mouth_ok:
+            report["reasons"].append("mouth_open_or_unknown")
+        _debug_log(config, f"mouth_ratio={mouth_ratio} ok={mouth_ok} max={mouth_ratio_max}")
+
+        hat_ratio = parsing_extra.get("hat_ratio") if parsing_extra else None
+        hat_ratio_max = thresholds.get("hat_ratio_max", DEFAULT_CONFIG["thresholds"]["hat_ratio_max"])
+        hat_ok = hat_ratio is not None and hat_ratio <= hat_ratio_max
+        report["items"]["hat"] = {
+            "value": hat_ratio,
+            "ok": hat_ok,
+            "thresholds": {"max": hat_ratio_max},
+            "source": "face_parsing",
+        }
+        if not hat_ok:
+            report["reasons"].append("hat_detected_or_unknown")
+        _debug_log(config, f"hat_ratio={hat_ratio} ok={hat_ok} max={hat_ratio_max}")
+
+        earring_ratio = parsing_extra.get("earring_ratio") if parsing_extra else None
+        earring_ratio_max = thresholds.get("earring_ratio_max", DEFAULT_CONFIG["thresholds"]["earring_ratio_max"])
+        earring_ok = earring_ratio is not None and earring_ratio <= earring_ratio_max
+        report["items"]["earring"] = {
+            "value": earring_ratio,
+            "ok": earring_ok,
+            "thresholds": {"max": earring_ratio_max},
+            "source": "face_parsing",
+        }
+        if not earring_ok:
+            report["reasons"].append("earring_detected_or_unknown")
+        _debug_log(config, f"earring_ratio={earring_ratio} ok={earring_ok} max={earring_ratio_max}")
+
+        neck_ratio = parsing_extra.get("neck_ratio") if parsing_extra else None
+        neck_ratio_min = thresholds.get("neck_ratio_min", DEFAULT_CONFIG["thresholds"]["neck_ratio_min"])
+        neck_ok = neck_ratio is not None and neck_ratio >= neck_ratio_min
+        report["items"]["neck"] = {
+            "value": neck_ratio,
+            "ok": neck_ok,
+            "thresholds": {"min": neck_ratio_min},
+            "source": "face_parsing",
+        }
+        if not neck_ok:
+            report["reasons"].append("neck_missing_or_unknown")
+        _debug_log(config, f"neck_ratio={neck_ratio} ok={neck_ok} min={neck_ratio_min}")
+
+        cloth_ratio = parsing_extra.get("cloth_ratio") if parsing_extra else None
+        cloth_ratio_min = thresholds.get("cloth_ratio_min", DEFAULT_CONFIG["thresholds"]["cloth_ratio_min"])
+        cloth_ok = cloth_ratio is not None and cloth_ratio >= cloth_ratio_min
+        report["items"]["cloth"] = {
+            "value": cloth_ratio,
+            "ok": cloth_ok,
+            "thresholds": {"min": cloth_ratio_min},
+            "source": "face_parsing",
+        }
+        if not cloth_ok:
+            report["reasons"].append("cloth_missing_or_unknown")
+        _debug_log(config, f"cloth_ratio={cloth_ratio} ok={cloth_ok} min={cloth_ratio_min}")
 
     if run_post:
         head_box = config.get("matting", {}).get("head_box")
