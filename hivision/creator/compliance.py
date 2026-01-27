@@ -39,6 +39,7 @@ DEFAULT_CONFIG = {
         "cloth_ratio_min": 0.02,
         "hair_ratio_min": 0.05,
         "hat_hair_ratio_max": 0.02,
+        "ear_ratio_min": 0.002,
         "matting_head_coverage_min": 0.80,
         "matting_top_coverage_min": 0.60
     },
@@ -59,6 +60,8 @@ DEFAULT_CONFIG = {
                 "hair": [13],
                 "hat": [14],
                 "earring": [15],
+                "left_ear": [8],
+                "right_ear": [9],
                 "neck": [16, 17],
                 "cloth": [18]
             }
@@ -398,6 +401,8 @@ def _face_parsing_metrics(
     hair_labels = labels.get("hair", [])
     hat_labels = labels.get("hat", [])
     earring_labels = labels.get("earring", [])
+    left_ear_labels = labels.get("left_ear", [])
+    right_ear_labels = labels.get("right_ear", [])
     neck_labels = labels.get("neck", [])
     cloth_labels = labels.get("cloth", [])
 
@@ -419,6 +424,8 @@ def _face_parsing_metrics(
         "hair_ratio": _ratio_for(hair_labels) if hair_labels else None,
         "hat_ratio": _ratio_for(hat_labels) if hat_labels else None,
         "earring_ratio": _ratio_for(earring_labels) if earring_labels else None,
+        "left_ear_ratio": _ratio_for(left_ear_labels) if left_ear_labels else None,
+        "right_ear_ratio": _ratio_for(right_ear_labels) if right_ear_labels else None,
         "neck_ratio": _ratio_for(neck_labels) if neck_labels else None,
         "cloth_ratio": _ratio_for(cloth_labels) if cloth_labels else None,
     }
@@ -655,6 +662,25 @@ def check_compliance(ctx: Context, stage: str = "full") -> Dict:
         if not earring_ok:
             report["reasons"].append("earring_detected_or_unknown")
         _debug_log(config, f"earring_ratio={earring_ratio} ok={earring_ok} max={earring_ratio_max}")
+
+        left_ear_ratio = parsing_extra.get("left_ear_ratio") if parsing_extra else None
+        right_ear_ratio = parsing_extra.get("right_ear_ratio") if parsing_extra else None
+        ear_ratio_min = thresholds.get("ear_ratio_min", DEFAULT_CONFIG["thresholds"]["ear_ratio_min"])
+        left_ear_ok = left_ear_ratio is not None and left_ear_ratio >= ear_ratio_min
+        right_ear_ok = right_ear_ratio is not None and right_ear_ratio >= ear_ratio_min
+        ears_ok = left_ear_ok and right_ear_ok
+        report["items"]["ears"] = {
+            "value": {"left": left_ear_ratio, "right": right_ear_ratio},
+            "ok": ears_ok,
+            "thresholds": {"min": ear_ratio_min},
+            "source": "face_parsing",
+        }
+        if not ears_ok:
+            report["reasons"].append("ears_not_visible_or_unknown")
+        _debug_log(
+            config,
+            f"ears_left={left_ear_ratio} right={right_ear_ratio} ok={ears_ok} min={ear_ratio_min}",
+        )
 
         neck_ratio = parsing_extra.get("neck_ratio") if parsing_extra else None
         neck_ratio_min = thresholds.get("neck_ratio_min", DEFAULT_CONFIG["thresholds"]["neck_ratio_min"])
