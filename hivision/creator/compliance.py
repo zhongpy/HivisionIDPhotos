@@ -766,7 +766,10 @@ def check_compliance(ctx: Context, stage: str = "full") -> Dict:
             if not right_ear_ok and side_right_ratio >= side_strip_min:
                 right_ear_ok = True
 
-        ears_ok = left_ear_ok and right_ear_ok
+        # Rule: one ear must be >= min, the other just > 0.
+        left_any = left_ear_ratio is not None and left_ear_ratio > 0
+        right_any = right_ear_ratio is not None and right_ear_ratio > 0
+        ears_ok = (left_ear_ok and right_any) or (right_ear_ok and left_any)
         report["items"]["ears"] = {
             "value": {
                 "left": left_ear_ratio,
