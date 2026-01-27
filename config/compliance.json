@@ -17,6 +17,8 @@
     "hair_ratio_min": 0.05,
     "hat_hair_ratio_max": 0.02,
     "ear_ratio_min": 0.002,
+    "ear_side_strip_ratio_min": 0.10,
+    "ear_side_strip_width_ratio": 0.18,
     "matting_head_coverage_min": 0.80,
     "matting_top_coverage_min": 0.60
   },
@@ -42,6 +44,12 @@
       "color_order": "RGB",
       "mean": [0.485, 0.456, 0.406],
       "std": [0.229, 0.224, 0.225],
+      "box": {
+        "left": -0.35,
+        "right": 1.35,
+        "top": -0.45,
+        "bottom": 1.35
+      },
       "labels": {
         "skin": [1],
         "eyeglass": [3],

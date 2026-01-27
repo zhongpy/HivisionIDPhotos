@@ -40,6 +40,8 @@ DEFAULT_CONFIG = {
         "hair_ratio_min": 0.05,
         "hat_hair_ratio_max": 0.02,
         "ear_ratio_min": 0.002,
+        "ear_side_strip_ratio_min": 0.10,
+        "ear_side_strip_width_ratio": 0.18,
         "matting_head_coverage_min": 0.80,
         "matting_top_coverage_min": 0.60
     },
@@ -219,6 +221,24 @@ def _face_roi(image: np.ndarray, face_rect: Tuple[float, float, float, float]) -
         return None
     x, y, w, h = face_rect
     x0, y0, x1, y1 = _clamp_box((x, y, x + w, y + h), image.shape[1], image.shape[0])
+    if x1 <= x0 or y1 <= y0:
+        return None
+    return image[y0:y1, x0:x1]
+
+def _expanded_face_roi(
+    image: np.ndarray,
+    face_rect: Tuple[float, float, float, float],
+    box_factors: Optional[dict] = None,
+) -> Optional[np.ndarray]:
+    if image is None or face_rect is None:
+        return None
+    x, y, w, h = face_rect
+    factors = box_factors or {"left": -0.2, "right": 1.2, "top": -0.4, "bottom": 1.2}
+    x0 = x + factors.get("left", -0.2) * w
+    x1 = x + factors.get("right", 1.2) * w
+    y0 = y + factors.get("top", -0.4) * h
+    y1 = y + factors.get("bottom", 1.2) * h
+    x0, y0, x1, y1 = _clamp_box((x0, y0, x1, y1), image.shape[1], image.shape[0])
     if x1 <= x0 or y1 <= y0:
         return None
     return image[y0:y1, x0:x1]
@@ -428,6 +448,8 @@ def _face_parsing_metrics(
         "right_ear_ratio": _ratio_for(right_ear_labels) if right_ear_labels else None,
         "neck_ratio": _ratio_for(neck_labels) if neck_labels else None,
         "cloth_ratio": _ratio_for(cloth_labels) if cloth_labels else None,
+        "_mask": mask,
+        "_skin_labels": skin_labels,
     }
     return skin_ratio, glasses_ratio, eye_ratio, extra
 
@@ -470,10 +492,13 @@ def check_compliance(ctx: Context, stage: str = "full") -> Dict:
     report = {"status": True, "items": {}, "reasons": [], "stage": stage}
     face_rect = ctx.face.get("rectangle") if ctx.face else None
     face_roi = _face_roi(ctx.origin_image, face_rect)
+    parsing_box = config.get("models", {}).get("face_parsing", {}).get("box")
+    parsing_roi = _expanded_face_roi(ctx.origin_image, face_rect, parsing_box)
     _debug_log(config, f"origin_image={None if ctx.origin_image is None else ctx.origin_image.shape}")
     _debug_log(config, f"matting_image={None if ctx.matting_image is None else ctx.matting_image.shape}")
     _debug_log(config, f"face_rect={face_rect}")
     _debug_log(config, f"face_roi={None if face_roi is None else face_roi.shape}")
+    _debug_log(config, f"parsing_roi={None if parsing_roi is None else parsing_roi.shape}")
 
     run_pre = stage in ("pre", "full")
     run_post = stage in ("post", "full")
@@ -509,7 +534,14 @@ def check_compliance(ctx: Context, stage: str = "full") -> Dict:
             report["reasons"].append("sharpness_low")
         _debug_log(config, f"sharpness={sharpness} ok={sharpness_ok} min={sharpness_min}")
 
-        parsing_skin_ratio, parsing_glasses_ratio, parsing_eye_ratio, parsing_extra = _face_parsing_metrics(face_roi)
+        # Use tight face ROI for facial features (occlusion/glasses/eyes/mouth)
+        parsing_skin_ratio, parsing_glasses_ratio, parsing_eye_ratio, parsing_extra = _face_parsing_metrics(
+            face_roi
+        )
+        # Use expanded ROI for hats/ears/neck/cloth when available
+        _, _, _, parsing_extra_wide = _face_parsing_metrics(
+            parsing_roi if parsing_roi is not None else face_roi
+        )
 
         try:
             eyes_ear = _eyes_open_value(
@@ -620,8 +652,8 @@ def check_compliance(ctx: Context, stage: str = "full") -> Dict:
             report["reasons"].append("mouth_open_or_unknown")
         _debug_log(config, f"mouth_ratio={mouth_ratio} ok={mouth_ok} max={mouth_ratio_max}")
 
-        hat_ratio = parsing_extra.get("hat_ratio") if parsing_extra else None
-        hair_ratio = parsing_extra.get("hair_ratio") if parsing_extra else None
+        hat_ratio = parsing_extra_wide.get("hat_ratio") if parsing_extra_wide else None
+        hair_ratio = parsing_extra_wide.get("hair_ratio") if parsing_extra_wide else None
         hat_ratio_max = thresholds.get("hat_ratio_max", DEFAULT_CONFIG["thresholds"]["hat_ratio_max"])
         hair_ratio_min = thresholds.get("hair_ratio_min", DEFAULT_CONFIG["thresholds"]["hair_ratio_min"])
         hat_hair_ratio_max = thresholds.get("hat_hair_ratio_max", DEFAULT_CONFIG["thresholds"]["hat_hair_ratio_max"])
@@ -650,7 +682,7 @@ def check_compliance(ctx: Context, stage: str = "full") -> Dict:
             f"hair_min={hair_ratio_min} hat_hair_max={hat_hair_ratio_max}",
         )
 
-        earring_ratio = parsing_extra.get("earring_ratio") if parsing_extra else None
+        earring_ratio = parsing_extra_wide.get("earring_ratio") if parsing_extra_wide else None
         earring_ratio_max = thresholds.get("earring_ratio_max", DEFAULT_CONFIG["thresholds"]["earring_ratio_max"])
         earring_ok = earring_ratio is not None and earring_ratio <= earring_ratio_max
         report["items"]["earring"] = {
@@ -663,16 +695,55 @@ def check_compliance(ctx: Context, stage: str = "full") -> Dict:
             report["reasons"].append("earring_detected_or_unknown")
         _debug_log(config, f"earring_ratio={earring_ratio} ok={earring_ok} max={earring_ratio_max}")
 
-        left_ear_ratio = parsing_extra.get("left_ear_ratio") if parsing_extra else None
-        right_ear_ratio = parsing_extra.get("right_ear_ratio") if parsing_extra else None
+        left_ear_ratio = parsing_extra_wide.get("left_ear_ratio") if parsing_extra_wide else None
+        right_ear_ratio = parsing_extra_wide.get("right_ear_ratio") if parsing_extra_wide else None
         ear_ratio_min = thresholds.get("ear_ratio_min", DEFAULT_CONFIG["thresholds"]["ear_ratio_min"])
         left_ear_ok = left_ear_ratio is not None and left_ear_ratio >= ear_ratio_min
         right_ear_ok = right_ear_ratio is not None and right_ear_ratio >= ear_ratio_min
+
+        # Fallback: use skin in side strips if ear labels are weak.
+        side_strip_min = thresholds.get(
+            "ear_side_strip_ratio_min", DEFAULT_CONFIG["thresholds"]["ear_side_strip_ratio_min"]
+        )
+        side_strip_width_ratio = thresholds.get(
+            "ear_side_strip_width_ratio", DEFAULT_CONFIG["thresholds"]["ear_side_strip_width_ratio"]
+        )
+        side_left_ratio = None
+        side_right_ratio = None
+        mask = parsing_extra_wide.get("_mask") if parsing_extra_wide else None
+        skin_labels = parsing_extra_wide.get("_skin_labels") if parsing_extra_wide else None
+        if mask is not None and skin_labels:
+            h, w = mask.shape[:2]
+            strip_w = max(1, int(w * side_strip_width_ratio))
+            left_strip = mask[:, :strip_w]
+            right_strip = mask[:, w - strip_w :]
+            skin_left = 0
+            skin_right = 0
+            for label in skin_labels:
+                skin_left += int(np.sum(left_strip == int(label)))
+                skin_right += int(np.sum(right_strip == int(label)))
+            side_left_ratio = skin_left / float(left_strip.size)
+            side_right_ratio = skin_right / float(right_strip.size)
+
+            if not left_ear_ok and side_left_ratio >= side_strip_min:
+                left_ear_ok = True
+            if not right_ear_ok and side_right_ratio >= side_strip_min:
+                right_ear_ok = True
+
         ears_ok = left_ear_ok and right_ear_ok
         report["items"]["ears"] = {
-            "value": {"left": left_ear_ratio, "right": right_ear_ratio},
+            "value": {
+                "left": left_ear_ratio,
+                "right": right_ear_ratio,
+                "side_left_skin_ratio": side_left_ratio,
+                "side_right_skin_ratio": side_right_ratio,
+            },
             "ok": ears_ok,
-            "thresholds": {"min": ear_ratio_min},
+            "thresholds": {
+                "min": ear_ratio_min,
+                "side_strip_min": side_strip_min,
+                "side_strip_width_ratio": side_strip_width_ratio,
+            },
             "source": "face_parsing",
         }
         if not ears_ok:
@@ -682,7 +753,7 @@ def check_compliance(ctx: Context, stage: str = "full") -> Dict:
             f"ears_left={left_ear_ratio} right={right_ear_ratio} ok={ears_ok} min={ear_ratio_min}",
         )
 
-        neck_ratio = parsing_extra.get("neck_ratio") if parsing_extra else None
+        neck_ratio = parsing_extra_wide.get("neck_ratio") if parsing_extra_wide else None
         neck_ratio_min = thresholds.get("neck_ratio_min", DEFAULT_CONFIG["thresholds"]["neck_ratio_min"])
         neck_ok = neck_ratio is not None and neck_ratio >= neck_ratio_min
         report["items"]["neck"] = {
@@ -695,7 +766,7 @@ def check_compliance(ctx: Context, stage: str = "full") -> Dict:
             report["reasons"].append("neck_missing_or_unknown")
         _debug_log(config, f"neck_ratio={neck_ratio} ok={neck_ok} min={neck_ratio_min}")
 
-        cloth_ratio = parsing_extra.get("cloth_ratio") if parsing_extra else None
+        cloth_ratio = parsing_extra_wide.get("cloth_ratio") if parsing_extra_wide else None
         cloth_ratio_min = thresholds.get("cloth_ratio_min", DEFAULT_CONFIG["thresholds"]["cloth_ratio_min"])
         cloth_ok = cloth_ratio is not None and cloth_ratio >= cloth_ratio_min
         report["items"]["cloth"] = {
