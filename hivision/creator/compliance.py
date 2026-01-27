@@ -37,6 +37,8 @@ DEFAULT_CONFIG = {
         "earring_ratio_max": 0.0005,
         "neck_ratio_min": 0.01,
         "cloth_ratio_min": 0.02,
+        "hair_ratio_min": 0.05,
+        "hat_hair_ratio_max": 0.02,
         "matting_head_coverage_min": 0.80,
         "matting_top_coverage_min": 0.60
     },
@@ -54,6 +56,7 @@ DEFAULT_CONFIG = {
                 "left_eye": [4],
                 "right_eye": [5],
                 "mouth": [10, 11, 12],
+                "hair": [13],
                 "hat": [14],
                 "earring": [15],
                 "neck": [16, 17],
@@ -392,6 +395,7 @@ def _face_parsing_metrics(
     left_eye_labels = labels.get("left_eye", [])
     right_eye_labels = labels.get("right_eye", [])
     mouth_labels = labels.get("mouth", [])
+    hair_labels = labels.get("hair", [])
     hat_labels = labels.get("hat", [])
     earring_labels = labels.get("earring", [])
     neck_labels = labels.get("neck", [])
@@ -412,6 +416,7 @@ def _face_parsing_metrics(
         eye_ratio = _ratio_for(left_eye_labels + right_eye_labels)
     extra = {
         "mouth_ratio": _ratio_for(mouth_labels) if mouth_labels else None,
+        "hair_ratio": _ratio_for(hair_labels) if hair_labels else None,
         "hat_ratio": _ratio_for(hat_labels) if hat_labels else None,
         "earring_ratio": _ratio_for(earring_labels) if earring_labels else None,
         "neck_ratio": _ratio_for(neck_labels) if neck_labels else None,
@@ -609,17 +614,34 @@ def check_compliance(ctx: Context, stage: str = "full") -> Dict:
         _debug_log(config, f"mouth_ratio={mouth_ratio} ok={mouth_ok} max={mouth_ratio_max}")
 
         hat_ratio = parsing_extra.get("hat_ratio") if parsing_extra else None
+        hair_ratio = parsing_extra.get("hair_ratio") if parsing_extra else None
         hat_ratio_max = thresholds.get("hat_ratio_max", DEFAULT_CONFIG["thresholds"]["hat_ratio_max"])
-        hat_ok = hat_ratio is not None and hat_ratio <= hat_ratio_max
+        hair_ratio_min = thresholds.get("hair_ratio_min", DEFAULT_CONFIG["thresholds"]["hair_ratio_min"])
+        hat_hair_ratio_max = thresholds.get("hat_hair_ratio_max", DEFAULT_CONFIG["thresholds"]["hat_hair_ratio_max"])
+        if hat_ratio is None:
+            hat_ok = False
+        else:
+            # If hair is strong, allow a tiny hat ratio without failing.
+            if hair_ratio is not None and hair_ratio >= hair_ratio_min:
+                hat_ok = hat_ratio <= hat_hair_ratio_max
+            else:
+                hat_ok = hat_ratio <= hat_ratio_max
         report["items"]["hat"] = {
             "value": hat_ratio,
             "ok": hat_ok,
-            "thresholds": {"max": hat_ratio_max},
+            "thresholds": {
+                "max": hat_hair_ratio_max if (hair_ratio is not None and hair_ratio >= hair_ratio_min) else hat_ratio_max,
+                "hair_min": hair_ratio_min,
+            },
             "source": "face_parsing",
         }
         if not hat_ok:
             report["reasons"].append("hat_detected_or_unknown")
-        _debug_log(config, f"hat_ratio={hat_ratio} ok={hat_ok} max={hat_ratio_max}")
+        _debug_log(
+            config,
+            f"hat_ratio={hat_ratio} ok={hat_ok} max={hat_ratio_max} hair_ratio={hair_ratio} "
+            f"hair_min={hair_ratio_min} hat_hair_max={hat_hair_ratio_max}",
+        )
 
         earring_ratio = parsing_extra.get("earring_ratio") if parsing_extra else None
         earring_ratio_max = thresholds.get("earring_ratio_max", DEFAULT_CONFIG["thresholds"]["earring_ratio_max"])
