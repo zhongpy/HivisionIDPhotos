@@ -4,6 +4,7 @@
     "brightness_min": 80.0,
     "brightness_max": 200.0,
     "sharpness_min": 80.0,
+    "sharpness_min_tenengrad": 1000.0,
     "eye_ear_min": 0.18,
     "eye_area_ratio_min": 0.004,
     "occlusion_ratio_min": 0.55,

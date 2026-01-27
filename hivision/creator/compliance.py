@@ -27,6 +27,7 @@ DEFAULT_CONFIG = {
         "brightness_min": 80.0,
         "brightness_max": 200.0,
         "sharpness_min": 80.0,
+        "sharpness_min_tenengrad": 1000.0,
         "eye_ear_min": 0.18,
         "eye_area_ratio_min": 0.004,
         "occlusion_ratio_min": 0.55,
@@ -272,6 +273,18 @@ def _sharpness_value(face_roi: np.ndarray) -> Optional[float]:
     if gray is None:
         return None
     return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+
+def _sharpness_tenengrad(face_roi: np.ndarray) -> Optional[float]:
+    if face_roi is None:
+        return None
+    gray = _to_gray(face_roi)
+    if gray is None:
+        return None
+    gx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+    gy = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+    g = gx * gx + gy * gy
+    return float(np.mean(g))
 
 
 def _ensure_bgr(image: np.ndarray) -> np.ndarray:
@@ -527,18 +540,32 @@ def check_compliance(ctx: Context, stage: str = "full") -> Dict:
         _debug_log(config, f"brightness={brightness} ok={brightness_ok} min={brightness_min} max={brightness_max}")
 
         sharpness = _sharpness_value(face_roi)
+        sharpness_t = _sharpness_tenengrad(face_roi)
         sharpness_min = thresholds.get("sharpness_min", DEFAULT_CONFIG["thresholds"]["sharpness_min"])
-        sharpness_ok = sharpness is not None and sharpness >= sharpness_min
+        sharpness_min_t = thresholds.get("sharpness_min_tenengrad", DEFAULT_CONFIG["thresholds"]["sharpness_min_tenengrad"])
+        # Pass if either metric meets its threshold
+        sharpness_ok = (
+            (sharpness is not None and sharpness >= sharpness_min)
+            or (sharpness_t is not None and sharpness_t >= sharpness_min_t)
+        )
         report["items"]["sharpness"] = {
-            "value": sharpness,
+            "value": {
+                "laplacian": sharpness,
+                "tenengrad": sharpness_t,
+            },
             "ok": sharpness_ok,
             "thresholds": {
-                "min": sharpness_min,
+                "laplacian_min": sharpness_min,
+                "tenengrad_min": sharpness_min_t,
             },
         }
         if not sharpness_ok:
             report["reasons"].append("sharpness_low")
-        _debug_log(config, f"sharpness={sharpness} ok={sharpness_ok} min={sharpness_min}")
+        _debug_log(
+            config,
+            f"sharpness_laplacian={sharpness} min={sharpness_min} "
+            f"sharpness_tenengrad={sharpness_t} min={sharpness_min_t} ok={sharpness_ok}",
+        )
 
         # Use tight face ROI for facial features (occlusion/glasses/eyes/mouth)
         parsing_skin_ratio, parsing_glasses_ratio, parsing_eye_ratio, parsing_extra = _face_parsing_metrics(
