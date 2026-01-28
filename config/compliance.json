@@ -22,7 +22,9 @@
     "ear_side_strip_ratio_min": 0.10,
     "ear_side_strip_width_ratio": 0.18,
     "matting_head_coverage_min": 0.80,
-    "matting_top_coverage_min": 0.60
+    "matting_top_coverage_min": 0.60,
+    "face_fill_target_ratio": 0.90,
+    "face_fill_min_scale": 0.60
   },
   "matting": {
     "head_box": {

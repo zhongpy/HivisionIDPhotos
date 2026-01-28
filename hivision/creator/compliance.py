@@ -45,7 +45,13 @@ DEFAULT_CONFIG = {
         "ear_side_strip_ratio_min": 0.10,
         "ear_side_strip_width_ratio": 0.18,
         "matting_head_coverage_min": 0.80,
-        "matting_top_coverage_min": 0.60
+        "matting_top_coverage_min": 0.60,
+        "matting_parsing_missing_max": 0.10,
+        "matting_parsing_missing_hair_max": None,
+        "matting_parsing_missing_skin_max": None,
+        "matting_parsing_missing_cloth_max": None,
+        "face_fill_target_ratio": 0.80,
+        "face_fill_min_scale": 0.60
     },
     "models": {
         "face_parsing": {
@@ -600,6 +606,23 @@ def check_compliance(ctx: Context, stage: str = "full") -> Dict:
         _, _, _, parsing_extra_wide = _face_parsing_metrics(
             parsing_roi if parsing_roi is not None else face_roi
         )
+        hair_ratio = parsing_extra.get("hair_ratio") if parsing_extra else None
+        face_fill_ratio = None
+        if parsing_skin_ratio is not None or hair_ratio is not None:
+            face_fill_ratio = float((parsing_skin_ratio or 0.0) + (hair_ratio or 0.0))
+        report["items"]["face_fill_ratio"] = {
+            "value": face_fill_ratio,
+            "ok": True,
+            "thresholds": {
+                "target": thresholds.get(
+                    "face_fill_target_ratio",
+                    DEFAULT_CONFIG["thresholds"]["face_fill_target_ratio"],
+                ),
+            },
+            "source": "face_parsing",
+        }
+        ctx.face_fill_ratio = face_fill_ratio
+        _debug_log(config, f"face_fill_ratio={face_fill_ratio}")
 
         try:
             eyes_ear = _eyes_open_value(
@@ -871,6 +894,24 @@ def check_compliance(ctx: Context, stage: str = "full") -> Dict:
         _debug_log(config, f"cloth_ratio={cloth_ratio} ok={cloth_ok} min={cloth_ratio_min}")
 
     if run_post:
+        face_fill_ratio = getattr(ctx, "face_fill_ratio", None)
+        if face_fill_ratio is None:
+            fill_skin, _, _, fill_extra = _face_parsing_metrics(face_roi)
+            fill_hair = fill_extra.get("hair_ratio") if fill_extra else None
+            if fill_skin is not None or fill_hair is not None:
+                face_fill_ratio = float((fill_skin or 0.0) + (fill_hair or 0.0))
+        target_ratio = thresholds.get(
+            "face_fill_target_ratio",
+            DEFAULT_CONFIG["thresholds"]["face_fill_target_ratio"],
+        )
+        min_scale = thresholds.get(
+            "face_fill_min_scale",
+            DEFAULT_CONFIG["thresholds"]["face_fill_min_scale"],
+        )
+        scale = 1.0
+        if face_fill_ratio is not None and target_ratio:
+            scale = max(min_scale, min(1.0, face_fill_ratio / target_ratio))
+
         head_box = config.get("matting", {}).get("head_box")
         top_fraction = config.get("matting", {}).get("top_fraction")
         head_coverage, top_coverage = _matting_head_coverage(
@@ -881,33 +922,44 @@ def check_compliance(ctx: Context, stage: str = "full") -> Dict:
         )
         matting_head_min = thresholds.get("matting_head_coverage_min", DEFAULT_CONFIG["thresholds"]["matting_head_coverage_min"])
         matting_top_min = thresholds.get("matting_top_coverage_min", DEFAULT_CONFIG["thresholds"]["matting_top_coverage_min"])
-        head_ok = head_coverage is not None and head_coverage >= matting_head_min
-        top_ok = top_coverage is not None and top_coverage >= matting_top_min
+        head_min_dynamic = matting_head_min * scale
+        top_min_dynamic = matting_top_min * scale
+        head_ok = head_coverage is not None and head_coverage >= head_min_dynamic
+        top_ok = top_coverage is not None and top_coverage >= top_min_dynamic
         report["items"]["matting_head_coverage"] = {
             "value": head_coverage,
             "ok": head_ok,
             "thresholds": {
-                "min": matting_head_min,
+                "min": head_min_dynamic,
+                "base_min": matting_head_min,
+                "scale": scale,
+                "face_fill_ratio": face_fill_ratio,
+                "target_ratio": target_ratio,
             },
         }
         report["items"]["matting_top_coverage"] = {
             "value": top_coverage,
             "ok": top_ok,
             "thresholds": {
-                "min": matting_top_min,
+                "min": top_min_dynamic,
+                "base_min": matting_top_min,
+                "scale": scale,
+                "face_fill_ratio": face_fill_ratio,
+                "target_ratio": target_ratio,
             },
         }
         if not head_ok or not top_ok:
             report["reasons"].append("matting_head_incomplete")
         _debug_log(
             config,
-            f"matting_head_coverage={head_coverage} ok={head_ok} min={matting_head_min} "
-            f"matting_top_coverage={top_coverage} ok={top_ok} min={matting_top_min}",
+            f"matting_head_coverage={head_coverage} ok={head_ok} min={head_min_dynamic} "
+            f"matting_top_coverage={top_coverage} ok={top_ok} min={top_min_dynamic} "
+            f"scale={scale} face_fill_ratio={face_fill_ratio} target={target_ratio}",
         )
 
     report["status"] = len(report["reasons"]) == 0
-    #if not report["status"]:
-        #raise ComplianceError(report)
+    if not report["status"] and run_pre:
+        raise ComplianceError(report)
     return report
 
 
