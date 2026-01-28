@@ -69,6 +69,7 @@ class IDCreator:
         saturation_strength: int = 0,
         face_alignment: bool = False,
         horizontal_flip: bool = False,
+        compliance_switches: dict = None,
     ) -> Result:
         """
         证件照处理函数
@@ -118,6 +119,7 @@ class IDCreator:
             ctx.processing_image, 2000
         )  # 将输入图片 resize 到最大边长为 2000
         ctx.origin_image = ctx.processing_image.copy()
+        ctx.compliance_switches = compliance_switches
         self.before_all and self.before_all(ctx)
 
         # 1. ------------------人像抠图------------------

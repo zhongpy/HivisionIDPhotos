@@ -61,6 +61,10 @@ async def idphoto_inference(
     contrast_strength: float = Form(0),
     sharpen_strength: float = Form(0),
     saturation_strength: float = Form(0),
+    check_ears: bool = Form(True),
+    check_mouth: bool = Form(True),
+    check_hat: bool = Form(True),
+    check_earring: bool = Form(True),
 ):  
     # 如果传入了base64，则直接使用base64解码
     if input_image_base64:
@@ -91,6 +95,12 @@ async def idphoto_inference(
             contrast_strength=contrast_strength,
             sharpen_strength=sharpen_strength,
             saturation_strength=saturation_strength,
+            compliance_switches={
+                "ears": check_ears,
+                "mouth": check_mouth,
+                "hat": check_hat,
+                "earring": check_earring,
+            },
         )
     except FaceError:
         result_message = {"status": False}

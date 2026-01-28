@@ -326,6 +326,13 @@ def _ensure_bgr(image: np.ndarray) -> np.ndarray:
     return image
 
 
+def _is_check_enabled(ctx: Context, key: str, default: bool = True) -> bool:
+    switches = getattr(ctx, "compliance_switches", None)
+    if not switches or key not in switches:
+        return default
+    return bool(switches.get(key))
+
+
 def _landmarks_from_mesh(image: np.ndarray):
     mesh = _get_face_mesh()
     image = _ensure_bgr(image)
@@ -720,152 +727,184 @@ def check_compliance(ctx: Context, stage: str = "full") -> Dict:
             f"occlusion_value={occlusion_value} ok={occlusion_ok} min={occlusion_threshold} source={occlusion_source}",
         )
 
-        mouth_inner_ratio = parsing_extra.get("mouth_inner_ratio") if parsing_extra else None
-        mouth_lip_ratio = parsing_extra.get("mouth_lip_ratio") if parsing_extra else None
-        mouth_total_ratio = None
-        mouth_open_ratio = None
-        if mouth_inner_ratio is not None and mouth_lip_ratio is not None:
-            mouth_total_ratio = mouth_inner_ratio + mouth_lip_ratio
-            denom = mouth_total_ratio if mouth_total_ratio > 1e-6 else 1e-6
-            mouth_open_ratio = mouth_inner_ratio / denom
-        mouth_total_ratio_max = thresholds.get(
-            "mouth_total_ratio_max", DEFAULT_CONFIG["thresholds"]["mouth_total_ratio_max"]
-        )
-        mouth_open_ratio_max = thresholds.get(
-            "mouth_open_ratio_max", DEFAULT_CONFIG["thresholds"]["mouth_open_ratio_max"]
-        )
-        mouth_ok = (
-            mouth_total_ratio is not None
-            and mouth_open_ratio is not None
-            and mouth_total_ratio <= mouth_total_ratio_max
-            and mouth_open_ratio <= mouth_open_ratio_max
-        )
-        report["items"]["mouth"] = {
-            "value": {
-                "inner": mouth_inner_ratio,
-                "lip": mouth_lip_ratio,
-                "total": mouth_total_ratio,
-                "open_ratio": mouth_open_ratio,
-            },
-            "ok": mouth_ok,
-            "thresholds": {
-                "total_max": mouth_total_ratio_max,
-                "open_ratio_max": mouth_open_ratio_max,
-            },
-            "source": "face_parsing",
-        }
-        if not mouth_ok:
-            report["reasons"].append("mouth_open_or_unknown")
-        _debug_log(
-            config,
-            f"mouth_inner={mouth_inner_ratio} lip={mouth_lip_ratio} total={mouth_total_ratio} "
-            f"open_ratio={mouth_open_ratio} ok={mouth_ok} total_max={mouth_total_ratio_max} "
-            f"open_ratio_max={mouth_open_ratio_max}",
-        )
-
-        hat_ratio = parsing_extra_wide.get("hat_ratio") if parsing_extra_wide else None
-        hair_ratio = parsing_extra_wide.get("hair_ratio") if parsing_extra_wide else None
-        hat_ratio_max = thresholds.get("hat_ratio_max", DEFAULT_CONFIG["thresholds"]["hat_ratio_max"])
-        hair_ratio_min = thresholds.get("hair_ratio_min", DEFAULT_CONFIG["thresholds"]["hair_ratio_min"])
-        hat_hair_ratio_max = thresholds.get("hat_hair_ratio_max", DEFAULT_CONFIG["thresholds"]["hat_hair_ratio_max"])
-        if hat_ratio is None:
-            hat_ok = False
+        if _is_check_enabled(ctx, "mouth"):
+            mouth_inner_ratio = parsing_extra.get("mouth_inner_ratio") if parsing_extra else None
+            mouth_lip_ratio = parsing_extra.get("mouth_lip_ratio") if parsing_extra else None
+            mouth_total_ratio = None
+            mouth_open_ratio = None
+            if mouth_inner_ratio is not None and mouth_lip_ratio is not None:
+                mouth_total_ratio = mouth_inner_ratio + mouth_lip_ratio
+                denom = mouth_total_ratio if mouth_total_ratio > 1e-6 else 1e-6
+                mouth_open_ratio = mouth_inner_ratio / denom
+            mouth_total_ratio_max = thresholds.get(
+                "mouth_total_ratio_max", DEFAULT_CONFIG["thresholds"]["mouth_total_ratio_max"]
+            )
+            mouth_open_ratio_max = thresholds.get(
+                "mouth_open_ratio_max", DEFAULT_CONFIG["thresholds"]["mouth_open_ratio_max"]
+            )
+            mouth_ok = (
+                mouth_total_ratio is not None
+                and mouth_open_ratio is not None
+                and mouth_total_ratio <= mouth_total_ratio_max
+                and mouth_open_ratio <= mouth_open_ratio_max
+            )
+            report["items"]["mouth"] = {
+                "value": {
+                    "inner": mouth_inner_ratio,
+                    "lip": mouth_lip_ratio,
+                    "total": mouth_total_ratio,
+                    "open_ratio": mouth_open_ratio,
+                },
+                "ok": mouth_ok,
+                "thresholds": {
+                    "total_max": mouth_total_ratio_max,
+                    "open_ratio_max": mouth_open_ratio_max,
+                },
+                "source": "face_parsing",
+            }
+            if not mouth_ok:
+                report["reasons"].append("mouth_open_or_unknown")
+            _debug_log(
+                config,
+                f"mouth_inner={mouth_inner_ratio} lip={mouth_lip_ratio} total={mouth_total_ratio} "
+                f"open_ratio={mouth_open_ratio} ok={mouth_ok} total_max={mouth_total_ratio_max} "
+                f"open_ratio_max={mouth_open_ratio_max}",
+            )
         else:
-            # If hair is strong, allow a tiny hat ratio without failing.
-            if hair_ratio is not None and hair_ratio >= hair_ratio_min:
-                hat_ok = hat_ratio <= hat_hair_ratio_max
+            report["items"]["mouth"] = {
+                "value": None,
+                "ok": True,
+                "thresholds": {},
+                "source": "disabled",
+            }
+
+        if _is_check_enabled(ctx, "hat"):
+            hat_ratio = parsing_extra_wide.get("hat_ratio") if parsing_extra_wide else None
+            hair_ratio = parsing_extra_wide.get("hair_ratio") if parsing_extra_wide else None
+            hat_ratio_max = thresholds.get("hat_ratio_max", DEFAULT_CONFIG["thresholds"]["hat_ratio_max"])
+            hair_ratio_min = thresholds.get("hair_ratio_min", DEFAULT_CONFIG["thresholds"]["hair_ratio_min"])
+            hat_hair_ratio_max = thresholds.get("hat_hair_ratio_max", DEFAULT_CONFIG["thresholds"]["hat_hair_ratio_max"])
+            if hat_ratio is None:
+                hat_ok = False
             else:
-                hat_ok = hat_ratio <= hat_ratio_max
-        report["items"]["hat"] = {
-            "value": hat_ratio,
-            "ok": hat_ok,
-            "thresholds": {
-                "max": hat_hair_ratio_max if (hair_ratio is not None and hair_ratio >= hair_ratio_min) else hat_ratio_max,
-                "hair_min": hair_ratio_min,
-            },
-            "source": "face_parsing",
-        }
-        if not hat_ok:
-            report["reasons"].append("hat_detected_or_unknown")
-        _debug_log(
-            config,
-            f"hat_ratio={hat_ratio} ok={hat_ok} max={hat_ratio_max} hair_ratio={hair_ratio} "
-            f"hair_min={hair_ratio_min} hat_hair_max={hat_hair_ratio_max}",
-        )
+                # If hair is strong, allow a tiny hat ratio without failing.
+                if hair_ratio is not None and hair_ratio >= hair_ratio_min:
+                    hat_ok = hat_ratio <= hat_hair_ratio_max
+                else:
+                    hat_ok = hat_ratio <= hat_ratio_max
+            report["items"]["hat"] = {
+                "value": hat_ratio,
+                "ok": hat_ok,
+                "thresholds": {
+                    "max": hat_hair_ratio_max if (hair_ratio is not None and hair_ratio >= hair_ratio_min) else hat_ratio_max,
+                    "hair_min": hair_ratio_min,
+                },
+                "source": "face_parsing",
+            }
+            if not hat_ok:
+                report["reasons"].append("hat_detected_or_unknown")
+            _debug_log(
+                config,
+                f"hat_ratio={hat_ratio} ok={hat_ok} max={hat_ratio_max} hair_ratio={hair_ratio} "
+                f"hair_min={hair_ratio_min} hat_hair_max={hat_hair_ratio_max}",
+            )
+        else:
+            report["items"]["hat"] = {
+                "value": None,
+                "ok": True,
+                "thresholds": {},
+                "source": "disabled",
+            }
 
-        earring_ratio = parsing_extra_wide.get("earring_ratio") if parsing_extra_wide else None
-        earring_ratio_max = thresholds.get("earring_ratio_max", DEFAULT_CONFIG["thresholds"]["earring_ratio_max"])
-        earring_ok = earring_ratio is not None and earring_ratio <= earring_ratio_max
-        report["items"]["earring"] = {
-            "value": earring_ratio,
-            "ok": earring_ok,
-            "thresholds": {"max": earring_ratio_max},
-            "source": "face_parsing",
-        }
-        if not earring_ok:
-            report["reasons"].append("earring_detected_or_unknown")
-        _debug_log(config, f"earring_ratio={earring_ratio} ok={earring_ok} max={earring_ratio_max}")
+        if _is_check_enabled(ctx, "earring"):
+            earring_ratio = parsing_extra_wide.get("earring_ratio") if parsing_extra_wide else None
+            earring_ratio_max = thresholds.get("earring_ratio_max", DEFAULT_CONFIG["thresholds"]["earring_ratio_max"])
+            earring_ok = earring_ratio is not None and earring_ratio <= earring_ratio_max
+            report["items"]["earring"] = {
+                "value": earring_ratio,
+                "ok": earring_ok,
+                "thresholds": {"max": earring_ratio_max},
+                "source": "face_parsing",
+            }
+            if not earring_ok:
+                report["reasons"].append("earring_detected_or_unknown")
+            _debug_log(config, f"earring_ratio={earring_ratio} ok={earring_ok} max={earring_ratio_max}")
+        else:
+            report["items"]["earring"] = {
+                "value": None,
+                "ok": True,
+                "thresholds": {},
+                "source": "disabled",
+            }
 
-        left_ear_ratio = parsing_extra_wide.get("left_ear_ratio") if parsing_extra_wide else None
-        right_ear_ratio = parsing_extra_wide.get("right_ear_ratio") if parsing_extra_wide else None
-        ear_ratio_min = thresholds.get("ear_ratio_min", DEFAULT_CONFIG["thresholds"]["ear_ratio_min"])
-        left_ear_ok = left_ear_ratio is not None and left_ear_ratio >= ear_ratio_min
-        right_ear_ok = right_ear_ratio is not None and right_ear_ratio >= ear_ratio_min
+        if _is_check_enabled(ctx, "ears"):
+            left_ear_ratio = parsing_extra_wide.get("left_ear_ratio") if parsing_extra_wide else None
+            right_ear_ratio = parsing_extra_wide.get("right_ear_ratio") if parsing_extra_wide else None
+            ear_ratio_min = thresholds.get("ear_ratio_min", DEFAULT_CONFIG["thresholds"]["ear_ratio_min"])
+            left_ear_ok = left_ear_ratio is not None and left_ear_ratio >= ear_ratio_min
+            right_ear_ok = right_ear_ratio is not None and right_ear_ratio >= ear_ratio_min
 
-        # Fallback: use skin in side strips if ear labels are weak.
-        side_strip_min = thresholds.get(
-            "ear_side_strip_ratio_min", DEFAULT_CONFIG["thresholds"]["ear_side_strip_ratio_min"]
-        )
-        side_strip_width_ratio = thresholds.get(
-            "ear_side_strip_width_ratio", DEFAULT_CONFIG["thresholds"]["ear_side_strip_width_ratio"]
-        )
-        side_left_ratio = None
-        side_right_ratio = None
-        mask = parsing_extra_wide.get("_mask") if parsing_extra_wide else None
-        skin_labels = parsing_extra_wide.get("_skin_labels") if parsing_extra_wide else None
-        if mask is not None and skin_labels:
-            h, w = mask.shape[:2]
-            strip_w = max(1, int(w * side_strip_width_ratio))
-            left_strip = mask[:, :strip_w]
-            right_strip = mask[:, w - strip_w :]
-            skin_left = 0
-            skin_right = 0
-            for label in skin_labels:
-                skin_left += int(np.sum(left_strip == int(label)))
-                skin_right += int(np.sum(right_strip == int(label)))
-            side_left_ratio = skin_left / float(left_strip.size)
-            side_right_ratio = skin_right / float(right_strip.size)
+            # Fallback: use skin in side strips if ear labels are weak.
+            side_strip_min = thresholds.get(
+                "ear_side_strip_ratio_min", DEFAULT_CONFIG["thresholds"]["ear_side_strip_ratio_min"]
+            )
+            side_strip_width_ratio = thresholds.get(
+                "ear_side_strip_width_ratio", DEFAULT_CONFIG["thresholds"]["ear_side_strip_width_ratio"]
+            )
+            side_left_ratio = None
+            side_right_ratio = None
+            mask = parsing_extra_wide.get("_mask") if parsing_extra_wide else None
+            skin_labels = parsing_extra_wide.get("_skin_labels") if parsing_extra_wide else None
+            if mask is not None and skin_labels:
+                h, w = mask.shape[:2]
+                strip_w = max(1, int(w * side_strip_width_ratio))
+                left_strip = mask[:, :strip_w]
+                right_strip = mask[:, w - strip_w :]
+                skin_left = 0
+                skin_right = 0
+                for label in skin_labels:
+                    skin_left += int(np.sum(left_strip == int(label)))
+                    skin_right += int(np.sum(right_strip == int(label)))
+                side_left_ratio = skin_left / float(left_strip.size)
+                side_right_ratio = skin_right / float(right_strip.size)
 
-            if not left_ear_ok and side_left_ratio >= side_strip_min:
-                left_ear_ok = True
-            if not right_ear_ok and side_right_ratio >= side_strip_min:
-                right_ear_ok = True
+                if not left_ear_ok and side_left_ratio >= side_strip_min:
+                    left_ear_ok = True
+                if not right_ear_ok and side_right_ratio >= side_strip_min:
+                    right_ear_ok = True
 
-        # Rule: one ear must be >= min, the other just > 0.
-        left_any = left_ear_ratio is not None and left_ear_ratio > 0
-        right_any = right_ear_ratio is not None and right_ear_ratio > 0
-        ears_ok = (left_ear_ok and right_any) or (right_ear_ok and left_any)
-        report["items"]["ears"] = {
-            "value": {
-                "left": left_ear_ratio,
-                "right": right_ear_ratio,
-                "side_left_skin_ratio": side_left_ratio,
-                "side_right_skin_ratio": side_right_ratio,
-            },
-            "ok": ears_ok,
-            "thresholds": {
-                "min": ear_ratio_min,
-                "side_strip_min": side_strip_min,
-                "side_strip_width_ratio": side_strip_width_ratio,
-            },
-            "source": "face_parsing",
-        }
-        if not ears_ok:
-            report["reasons"].append("ears_not_visible_or_unknown")
-        _debug_log(
-            config,
-            f"ears_left={left_ear_ratio} right={right_ear_ratio} ok={ears_ok} min={ear_ratio_min}",
-        )
+            # Rule: one ear must be >= min, the other just > 0.
+            left_any = left_ear_ratio is not None and left_ear_ratio > 0
+            right_any = right_ear_ratio is not None and right_ear_ratio > 0
+            ears_ok = (left_ear_ok and right_any) or (right_ear_ok and left_any)
+            report["items"]["ears"] = {
+                "value": {
+                    "left": left_ear_ratio,
+                    "right": right_ear_ratio,
+                    "side_left_skin_ratio": side_left_ratio,
+                    "side_right_skin_ratio": side_right_ratio,
+                },
+                "ok": ears_ok,
+                "thresholds": {
+                    "min": ear_ratio_min,
+                    "side_strip_min": side_strip_min,
+                    "side_strip_width_ratio": side_strip_width_ratio,
+                },
+                "source": "face_parsing",
+            }
+            if not ears_ok:
+                report["reasons"].append("ears_not_visible_or_unknown")
+            _debug_log(
+                config,
+                f"ears_left={left_ear_ratio} right={right_ear_ratio} ok={ears_ok} min={ear_ratio_min}",
+            )
+        else:
+            report["items"]["ears"] = {
+                "value": None,
+                "ok": True,
+                "thresholds": {},
+                "source": "disabled",
+            }
 
         neck_ratio = parsing_extra_wide.get("neck_ratio") if parsing_extra_wide else None
         neck_ratio_min = thresholds.get("neck_ratio_min", DEFAULT_CONFIG["thresholds"]["neck_ratio_min"])

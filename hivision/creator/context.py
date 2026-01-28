@@ -170,6 +170,10 @@ class Context:
         """
         Compliance report with numeric values and reasons.
         """
+        self.compliance_switches: Optional[dict] = None
+        """
+        Optional per-request switches to enable/disable specific compliance checks.
+        """
         self.align_info: Optional[dict] = None
         """
         人脸矫正信息，仅当 align_face 为 True 时存在
