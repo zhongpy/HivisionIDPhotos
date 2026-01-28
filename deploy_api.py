@@ -212,6 +212,16 @@ async def generate_layout_photos(
     input_image_base64: str = Form(None),
     height: int = Form(413),
     width: int = Form(295),
+    layout_type: str = Form("A4"),
+    layout_width_mm: float = Form(None),
+    layout_height_mm: float = Form(None),
+    small_scale: float = Form(0.5),
+    watermark_text: str = Form(""),
+    watermark_size: int = Form(50),
+    watermark_opacity: float = Form(0.5),
+    watermark_angle: int = Form(45),
+    watermark_color: str = Form("#8B8B1B"),
+    watermark_space: int = Form(75),
     kb: int = Form(None),
     dpi: int = Form(300),
 ):
@@ -225,27 +235,85 @@ async def generate_layout_photos(
 
     size = (int(height), int(width))
 
+    def _mm_to_px(mm_value, dpi_value):
+        return int(round(float(mm_value) / 25.4 * float(dpi_value)))
+
+    layout_map_mm = {
+        "A4": (210.0, 297.0),
+        "6inch": (152.4, 101.6),
+        "5inch": (127.0, 88.9),
+        "4R": (152.4, 101.6),
+        "3R": (127.0, 88.9),
+    }
+
+    if layout_type == "custom" and layout_width_mm and layout_height_mm:
+        layout_w_px = _mm_to_px(layout_width_mm, dpi)
+        layout_h_px = _mm_to_px(layout_height_mm, dpi)
+    else:
+        layout_mm = layout_map_mm.get(layout_type, layout_map_mm["A4"])
+        layout_w_px = _mm_to_px(layout_mm[0], dpi)
+        layout_h_px = _mm_to_px(layout_mm[1], dpi)
+
     typography_arr, typography_rotate = generate_layout_array(
-        input_height=size[0], input_width=size[1]
+        input_height=size[0],
+        input_width=size[1],
+        LAYOUT_WIDTH=layout_w_px,
+        LAYOUT_HEIGHT=layout_h_px,
     )
 
     result_layout_image = generate_layout_image(
-        img, typography_arr, typography_rotate, height=size[0], width=size[1]
+        img,
+        typography_arr,
+        typography_rotate,
+        height=size[0],
+        width=size[1],
+        LAYOUT_WIDTH=layout_w_px,
+        LAYOUT_HEIGHT=layout_h_px,
     ).astype(np.uint8)
 
     result_layout_image = cv2.cvtColor(result_layout_image, cv2.COLOR_RGB2BGR)
+    result_layout_small = None
+    if small_scale and float(small_scale) > 0:
+        scale = float(small_scale)
+        small_w = max(1, int(round(result_layout_image.shape[1] * scale)))
+        small_h = max(1, int(round(result_layout_image.shape[0] * scale)))
+        result_layout_small = cv2.resize(
+            result_layout_image, (small_w, small_h), interpolation=cv2.INTER_AREA
+        )
+        if watermark_text:
+            result_layout_small = add_watermark(
+                result_layout_small,
+                text=watermark_text,
+                size=watermark_size,
+                opacity=watermark_opacity,
+                angle=watermark_angle,
+                color=watermark_color,
+                space=watermark_space,
+            )
+            result_layout_small = cv2.cvtColor(result_layout_small, cv2.COLOR_RGB2BGR)
     if kb:
         result_layout_image_bytes = resize_image_to_kb(
             result_layout_image, None, int(kb), dpi=dpi
         )
     else:
         result_layout_image_bytes = save_image_dpi_to_bytes(result_layout_image, None, dpi=dpi)
-        
+
     result_layout_image_base64 = bytes_2_base64(result_layout_image_bytes)
+    result_layout_small_base64 = None
+    if result_layout_small is not None:
+        if kb:
+            result_layout_small_bytes = resize_image_to_kb(
+                result_layout_small, None, int(kb), dpi=dpi
+            )
+        else:
+            result_layout_small_bytes = save_image_dpi_to_bytes(result_layout_small, None, dpi=dpi)
+        result_layout_small_base64 = bytes_2_base64(result_layout_small_bytes)
 
     result_messgae = {
         "status": True,
         "image_base64": result_layout_image_base64,
+        "image_base64_standard": result_layout_image_base64,
+        "image_base64_small": result_layout_small_base64,
     }
 
     return result_messgae
