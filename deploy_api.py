@@ -61,6 +61,8 @@ async def idphoto_inference(
     contrast_strength: float = Form(0),
     sharpen_strength: float = Form(0),
     saturation_strength: float = Form(0),
+    check_eyes: bool = Form(True),
+    check_glasses: bool = Form(True),
     check_ears: bool = Form(True),
     check_mouth: bool = Form(True),
     check_hat: bool = Form(True),
@@ -96,6 +98,8 @@ async def idphoto_inference(
             sharpen_strength=sharpen_strength,
             saturation_strength=saturation_strength,
             compliance_switches={
+                "eyes": check_eyes,
+                "glasses": check_glasses,
                 "ears": check_ears,
                 "mouth": check_mouth,
                 "hat": check_hat,

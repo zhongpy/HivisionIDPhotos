@@ -631,66 +631,83 @@ def check_compliance(ctx: Context, stage: str = "full") -> Dict:
         ctx.face_fill_ratio = face_fill_ratio
         _debug_log(config, f"face_fill_ratio={face_fill_ratio}")
 
-        try:
-            eyes_ear = _eyes_open_value(
-                face_roi if face_roi is not None else ctx.origin_image,
-                ctx.origin_image,
+        if _is_check_enabled(ctx, "eyes"):
+            try:
+                eyes_ear = _eyes_open_value(
+                    face_roi if face_roi is not None else ctx.origin_image,
+                    ctx.origin_image,
+                )
+            except ImportError:
+                eyes_ear = None
+            eye_ear_min = thresholds.get("eye_ear_min", DEFAULT_CONFIG["thresholds"]["eye_ear_min"])
+            eye_area_min = thresholds.get("eye_area_ratio_min")
+            eyes_ok = eyes_ear is not None and eyes_ear >= eye_ear_min
+            if eyes_ear is None and parsing_eye_ratio is not None and eye_area_min is not None:
+                eyes_ear = parsing_eye_ratio
+                eyes_ok = eyes_ear >= eye_area_min
+                report["items"]["eyes_open"] = {
+                    "value": eyes_ear,
+                    "ok": eyes_ok,
+                    "thresholds": {
+                        "min": eye_area_min,
+                    },
+                    "source": "face_parsing",
+                }
+            else:
+                report["items"]["eyes_open"] = {
+                    "value": eyes_ear,
+                    "ok": eyes_ok,
+                    "thresholds": {
+                        "min": eye_ear_min,
+                    },
+                    "source": "mesh",
+                }
+            if not eyes_ok:
+                report["reasons"].append("eyes_closed_or_unknown")
+            _debug_log(
+                config,
+                f"eyes_open={eyes_ear} ok={eyes_ok} min={eye_area_min if report['items']['eyes_open']['source'] == 'face_parsing' else eye_ear_min} "
+                f"source={report['items']['eyes_open']['source']}",
             )
-        except ImportError:
-            eyes_ear = None
-        eye_ear_min = thresholds.get("eye_ear_min", DEFAULT_CONFIG["thresholds"]["eye_ear_min"])
-        eye_area_min = thresholds.get("eye_area_ratio_min")
-        eyes_ok = eyes_ear is not None and eyes_ear >= eye_ear_min
-        if eyes_ear is None and parsing_eye_ratio is not None and eye_area_min is not None:
-            eyes_ear = parsing_eye_ratio
-            eyes_ok = eyes_ear >= eye_area_min
-            report["items"]["eyes_open"] = {
-                "value": eyes_ear,
-                "ok": eyes_ok,
-                "thresholds": {
-                    "min": eye_area_min,
-                },
-                "source": "face_parsing",
-            }
         else:
             report["items"]["eyes_open"] = {
-                "value": eyes_ear,
-                "ok": eyes_ok,
-                "thresholds": {
-                    "min": eye_ear_min,
-                },
-                "source": "mesh",
+                "value": None,
+                "ok": True,
+                "thresholds": {},
+                "source": "disabled",
             }
-        if not eyes_ok:
-            report["reasons"].append("eyes_closed_or_unknown")
-        _debug_log(
-            config,
-            f"eyes_open={eyes_ear} ok={eyes_ok} min={eye_area_min if report['items']['eyes_open']['source'] == 'face_parsing' else eye_ear_min} "
-            f"source={report['items']['eyes_open']['source']}",
-        )
-        glasses_ratio_min = thresholds.get("glasses_ratio_min", DEFAULT_CONFIG["thresholds"]["glasses_ratio_min"])
-        glasses_ok = None
-        glasses_count = None
-        if parsing_glasses_ratio is not None:
-            glasses_ok = parsing_glasses_ratio < glasses_ratio_min
+
+        if _is_check_enabled(ctx, "glasses"):
+            glasses_ratio_min = thresholds.get("glasses_ratio_min", DEFAULT_CONFIG["thresholds"]["glasses_ratio_min"])
+            glasses_ok = None
+            glasses_count = None
+            if parsing_glasses_ratio is not None:
+                glasses_ok = parsing_glasses_ratio < glasses_ratio_min
+            else:
+                glasses_count = _glasses_count(face_roi)
+                glasses_ok = glasses_count is not None and glasses_count == 0
+            report["items"]["glasses"] = {
+                "value": parsing_glasses_ratio if parsing_glasses_ratio is not None else glasses_count,
+                "ok": glasses_ok,
+                "thresholds": {
+                    "max": 0 if parsing_glasses_ratio is None else glasses_ratio_min,
+                },
+                "source": "face_parsing" if parsing_glasses_ratio is not None else "haar",
+            }
+            if not glasses_ok:
+                report["reasons"].append("glasses_detected_or_unknown")
+            _debug_log(
+                config,
+                f"glasses_value={report['items']['glasses']['value']} ok={glasses_ok} "
+                f"threshold={report['items']['glasses']['thresholds']['max']} source={report['items']['glasses']['source']}",
+            )
         else:
-            glasses_count = _glasses_count(face_roi)
-            glasses_ok = glasses_count is not None and glasses_count == 0
-        report["items"]["glasses"] = {
-            "value": parsing_glasses_ratio if parsing_glasses_ratio is not None else glasses_count,
-            "ok": glasses_ok,
-            "thresholds": {
-                "max": 0 if parsing_glasses_ratio is None else glasses_ratio_min,
-            },
-            "source": "face_parsing" if parsing_glasses_ratio is not None else "haar",
-        }
-        if not glasses_ok:
-            report["reasons"].append("glasses_detected_or_unknown")
-        _debug_log(
-            config,
-            f"glasses_value={report['items']['glasses']['value']} ok={glasses_ok} "
-            f"threshold={report['items']['glasses']['thresholds']['max']} source={report['items']['glasses']['source']}",
-        )
+            report["items"]["glasses"] = {
+                "value": None,
+                "ok": True,
+                "thresholds": {},
+                "source": "disabled",
+            }
 
         try:
             occlusion_ratio = _occlusion_ratio_value(
