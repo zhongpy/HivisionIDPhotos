@@ -267,6 +267,7 @@ async def generate_layout_photos(
         typography_rotate,
         height=size[0],
         width=size[1],
+        crop_line=True,
         LAYOUT_WIDTH=layout_w_px,
         LAYOUT_HEIGHT=layout_h_px,
     ).astype(np.uint8)
@@ -281,8 +282,9 @@ async def generate_layout_photos(
             result_layout_image, (small_w, small_h), interpolation=cv2.INTER_AREA
         )
         if watermark_text:
-            result_layout_small = add_watermark(
-                result_layout_small,
+            result_layout_small_rgb = cv2.cvtColor(result_layout_small, cv2.COLOR_BGR2RGB)
+            result_layout_small_rgb = add_watermark(
+                result_layout_small_rgb,
                 text=watermark_text,
                 size=watermark_size,
                 opacity=watermark_opacity,
@@ -290,7 +292,7 @@ async def generate_layout_photos(
                 color=watermark_color,
                 space=watermark_space,
             )
-            result_layout_small = cv2.cvtColor(result_layout_small, cv2.COLOR_RGB2BGR)
+            result_layout_small = cv2.cvtColor(result_layout_small_rgb, cv2.COLOR_RGB2BGR)
     if kb:
         result_layout_image_bytes = resize_image_to_kb(
             result_layout_image, None, int(kb), dpi=dpi
