@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, Form, File
+﻿from fastapi import FastAPI, UploadFile, Form, File
 from hivision import IDCreator
 from hivision.error import FaceError, ComplianceError
 from hivision.creator.layout_calculator import (
@@ -19,8 +19,6 @@ import numpy as np
 import cv2
 from starlette.middleware.cors import CORSMiddleware
 from starlette.formparsers import MultiPartParser
-from PIL import Image
-import io
 
 # 设置Starlette表单字段大小限制
 MultiPartParser.max_part_size = 10 * 1024 * 1024  # 10MB
@@ -29,36 +27,6 @@ MultiPartParser.max_file_size = 20 * 1024 * 1024   # 20MB
 
 app = FastAPI()
 creator = IDCreator()
-
-
-def _to_jpeg_bytes(image: np.ndarray, dpi: int = 300) -> bytes:
-    if image is None:
-        return b""
-    if image.ndim == 2:
-        image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-    if image.ndim == 3 and image.shape[2] == 4:
-        image = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
-    rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    pil_img = Image.fromarray(rgb)
-    byte_stream = io.BytesIO()
-    pil_img.save(byte_stream, format="JPEG", quality=100, subsampling=0, dpi=(dpi, dpi))
-    return byte_stream.getvalue()
-
-
-def _to_png_bytes(image: np.ndarray, dpi: int = 300) -> bytes:
-    if image is None:
-        return b""
-    if image.ndim == 2:
-        image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
-    if image.ndim == 3 and image.shape[2] == 4:
-        image = cv2.cvtColor(image, cv2.COLOR_BGRA2RGBA)
-        pil_img = Image.fromarray(image)
-    else:
-        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        pil_img = Image.fromarray(rgb)
-    byte_stream = io.BytesIO()
-    pil_img.save(byte_stream, format="PNG", dpi=(dpi, dpi))
-    return byte_stream.getvalue()
 
 # 添加 CORS 中间件 解决跨域问题
 app.add_middleware(
@@ -229,7 +197,7 @@ async def photo_add_background(
     if kb:
         result_image_bytes = resize_image_to_kb(result_image, None, int(kb), dpi=dpi)
     else:
-        result_image_bytes = _to_jpeg_bytes(result_image, dpi)
+        result_image_bytes = save_image_dpi_to_bytes(result_image, None, dpi=dpi)
 
     result_messgae = {
         "status": True,
@@ -332,7 +300,7 @@ async def generate_layout_photos(
             result_layout_image, None, int(kb), dpi=dpi
         )
     else:
-        result_layout_image_bytes = _to_jpeg_bytes(result_layout_image, dpi)
+        result_layout_image_bytes = save_image_dpi_to_bytes(result_layout_image, None, dpi=dpi)
 
     result_layout_image_base64 = bytes_2_base64(result_layout_image_bytes)
     result_layout_small_base64 = None
@@ -342,7 +310,7 @@ async def generate_layout_photos(
                 result_layout_small, None, int(kb), dpi=dpi
             )
         else:
-            result_layout_small_bytes = _to_jpeg_bytes(result_layout_small, dpi)
+            result_layout_small_bytes = save_image_dpi_to_bytes(result_layout_small, None, dpi=dpi)
         result_layout_small_base64 = bytes_2_base64(result_layout_small_bytes)
 
     result_messgae = {
@@ -383,7 +351,7 @@ async def watermark(
         if kb:
             result_image_bytes = resize_image_to_kb(result_image, None, int(kb), dpi=dpi)
         else:
-            result_image_bytes = _to_jpeg_bytes(result_image, dpi)
+            result_image_bytes = save_image_dpi_to_bytes(result_image, None, dpi=dpi)
         result_image_base64 = bytes_2_base64(result_image_bytes)
 
         result_messgae = {

@@ -27,65 +27,87 @@ def auto_adjust_matting(matting_image: np.ndarray) -> np.ndarray:
 
     original_bgr = bgr.copy()
 
-    # White balance (reduce channel cast)
-    mean_b = float(np.mean(bgr[:, :, 0][mask]))
-    mean_g = float(np.mean(bgr[:, :, 1][mask]))
-    mean_r = float(np.mean(bgr[:, :, 2][mask]))
-    mean_all = (mean_b + mean_g + mean_r) / 3.0
-    for ch, mean_c in enumerate([mean_b, mean_g, mean_r]):
-        if mean_c > 1e-6:
-            scale = mean_all / mean_c
-            scale = max(0.8, min(1.2, scale))
-            bgr[:, :, ch] *= scale
-
-    # Brightness + contrast on Y channel
+    # --- Detect current metrics ---
     ycrcb = cv2.cvtColor(bgr.astype(np.uint8), cv2.COLOR_BGR2YCrCb).astype(np.float32)
     y = ycrcb[:, :, 0]
     y_masked = y[mask]
+    mean_y = float(np.mean(y_masked)) if y_masked.size else 0.0
+    std_y = float(np.std(y_masked)) if y_masked.size else 0.0
+    shadow_mean = 0.0
     if y_masked.size:
-        mean_y = float(np.mean(y_masked))
-        target_y = 150.0
-        y += (target_y - mean_y)
-
-        # Contrast adjustment (std of Y)
-        std_y = float(np.std(y_masked))
-        target_std = 20.0
-        if std_y > 1e-6:
-            alpha_c = target_std / std_y
-            alpha_c = max(0.7, min(1.3, alpha_c))
-            y = (y - mean_y) * alpha_c + mean_y
-
-        # Shadow lift
         low_thresh = np.percentile(y_masked, 20)
         low_region = y_masked[y_masked <= low_thresh]
-        if low_region.size:
-            shadow_mean = float(np.mean(low_region))
-            if shadow_mean < 80.0:
-                lift = min(40.0, 80.0 - shadow_mean)
-                y += lift * (1.0 - (y / 255.0))
+        shadow_mean = float(np.mean(low_region)) if low_region.size else mean_y
+
+    hsv = cv2.cvtColor(bgr.astype(np.uint8), cv2.COLOR_BGR2HSV).astype(np.float32)
+    s = hsv[:, :, 1]
+    s_masked = s[mask]
+    mean_s = float(np.mean(s_masked)) if s_masked.size else 0.0
+
+    gray = cv2.cvtColor(bgr.astype(np.uint8), cv2.COLOR_BGR2GRAY)
+    sharp_val = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+    mean_b = float(np.mean(bgr[:, :, 0][mask]))
+    mean_g = float(np.mean(bgr[:, :, 1][mask]))
+    mean_r = float(np.mean(bgr[:, :, 2][mask]))
+
+    # --- Incremental adjustments based on current metrics ---
+    # 1) Color temperature / white balance (small step)
+    if mean_b > 1e-6 and mean_r > 1e-6:
+        rb_ratio = mean_r / mean_b
+        # target around neutral; adjust gently
+        if rb_ratio < 0.9:
+            scale_r = 1.05
+            scale_b = 0.97
+        elif rb_ratio > 1.1:
+            scale_r = 0.97
+            scale_b = 1.05
+        else:
+            scale_r = 1.0
+            scale_b = 1.0
+        bgr[:, :, 2] *= scale_r
+        bgr[:, :, 0] *= scale_b
+
+    # 2) Brightness (Y mean 120-180, prefer 140-160)
+    if mean_y < 120.0:
+        y += min(15.0, 140.0 - mean_y)
+    elif mean_y > 180.0:
+        y -= min(15.0, mean_y - 160.0)
+
+    # 3) Shadow lift (>= 80)
+    if shadow_mean < 80.0:
+        lift = min(25.0, 80.0 - shadow_mean)
+        y += lift * (1.0 - (y / 255.0))
+
+    # 4) Contrast (std 15-25)
+    if std_y > 1e-6:
+        if std_y < 15.0:
+            alpha_c = min(1.2, 15.0 / std_y)
+            y = (y - mean_y) * alpha_c + mean_y
+        elif std_y > 25.0:
+            alpha_c = max(0.8, 25.0 / std_y)
+            y = (y - mean_y) * alpha_c + mean_y
 
     ycrcb[:, :, 0] = np.clip(y, 0, 255)
     bgr = cv2.cvtColor(ycrcb.astype(np.uint8), cv2.COLOR_YCrCb2BGR).astype(np.float32)
 
-    # Saturation adjustment
+    # 5) Saturation (20-30)
     hsv = cv2.cvtColor(bgr.astype(np.uint8), cv2.COLOR_BGR2HSV).astype(np.float32)
     s = hsv[:, :, 1]
     s_masked = s[mask]
-    if s_masked.size:
-        mean_s = float(np.mean(s_masked))
-        target_s = 25.0
-        if mean_s > 1e-6:
-            s_scale = target_s / mean_s
-            s_scale = max(0.6, min(1.4, s_scale))
+    if s_masked.size and mean_s > 1e-6:
+        if mean_s < 20.0:
+            s_scale = min(1.3, 20.0 / mean_s)
+            s *= s_scale
+        elif mean_s > 30.0:
+            s_scale = max(0.8, 30.0 / mean_s)
             s *= s_scale
     hsv[:, :, 1] = np.clip(s, 0, 255)
     bgr = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR).astype(np.float32)
 
-    # Sharpness (unsharp mask) if too soft
-    gray = cv2.cvtColor(bgr.astype(np.uint8), cv2.COLOR_BGR2GRAY)
-    sharp_val = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    # 6) Sharpness (10-15)
     if sharp_val < 10.0:
-        amount = min(1.2, max(0.3, (10.0 - sharp_val) / 10.0 + 0.3))
+        amount = min(1.0, max(0.2, (10.0 - sharp_val) / 10.0 + 0.2))
         blur = cv2.GaussianBlur(bgr, (0, 0), 1.0)
         bgr = cv2.addWeighted(bgr, 1.0 + amount, blur, -amount, 0)
 
