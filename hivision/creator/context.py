@@ -174,6 +174,10 @@ class Context:
         """
         Optional per-request switches to enable/disable specific compliance checks.
         """
+        self.auto_tone: bool = False
+        """
+        Whether to apply automatic tone adjustment on matting image before rendering outputs.
+        """
         self.align_info: Optional[dict] = None
         """
         人脸矫正信息，仅当 align_face 为 True 时存在

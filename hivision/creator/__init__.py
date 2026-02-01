@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 r"""
 @DATE: 2024/9/5 16:45
@@ -14,7 +14,7 @@ from .context import Context, ContextHandler, Params, Result
 from .human_matting import extract_human
 from .face_detector import detect_face_mtcnn
 from hivision.plugin.beauty.handler import beauty_face
-from .photo_adjuster import adjust_photo
+from .photo_adjuster import adjust_photo, auto_adjust_matting
 from .compliance import check_pre_compliance, check_post_compliance
 import cv2
 import time
@@ -70,6 +70,7 @@ class IDCreator:
         face_alignment: bool = False,
         horizontal_flip: bool = False,
         compliance_switches: dict = None,
+        auto_tone: bool = False,
     ) -> Result:
         """
         证件照处理函数
@@ -120,6 +121,7 @@ class IDCreator:
         )  # 将输入图片 resize 到最大边长为 2000
         ctx.origin_image = ctx.processing_image.copy()
         ctx.compliance_switches = compliance_switches
+        ctx.auto_tone = bool(auto_tone)
         self.before_all and self.before_all(ctx)
 
         # 1. ------------------人像抠图------------------
@@ -194,6 +196,9 @@ class IDCreator:
             end_compliance_time = time.time()
             print(f"[3.2]  Pre-Compliance Check Time: {end_compliance_time - start_compliance_time:.3f}s")
 
+        if ctx.auto_tone:
+            ctx.matting_image = auto_adjust_matting(ctx.matting_image)
+
         # 4. ------------------图像调整------------------
         print("[4]  Start Image Post-Adjustment...")
         start_adjust_time = time.time()
@@ -231,3 +236,4 @@ class IDCreator:
         print(f"[Total]  Total Time: {total_end_time - total_start_time:.3f}s")
 
         return ctx.result
+

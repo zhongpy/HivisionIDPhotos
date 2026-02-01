@@ -15,6 +15,87 @@ import math
 import cv2
 
 
+def auto_adjust_matting(matting_image: np.ndarray) -> np.ndarray:
+    if matting_image is None or matting_image.ndim != 3 or matting_image.shape[2] < 4:
+        return matting_image
+    b, g, r, a = cv2.split(matting_image)
+    bgr = cv2.merge((b, g, r)).astype(np.float32)
+    alpha = a
+    mask = alpha > 0
+    if not np.any(mask):
+        return matting_image
+
+    original_bgr = bgr.copy()
+
+    # White balance (reduce channel cast)
+    mean_b = float(np.mean(bgr[:, :, 0][mask]))
+    mean_g = float(np.mean(bgr[:, :, 1][mask]))
+    mean_r = float(np.mean(bgr[:, :, 2][mask]))
+    mean_all = (mean_b + mean_g + mean_r) / 3.0
+    for ch, mean_c in enumerate([mean_b, mean_g, mean_r]):
+        if mean_c > 1e-6:
+            scale = mean_all / mean_c
+            scale = max(0.8, min(1.2, scale))
+            bgr[:, :, ch] *= scale
+
+    # Brightness + contrast on Y channel
+    ycrcb = cv2.cvtColor(bgr.astype(np.uint8), cv2.COLOR_BGR2YCrCb).astype(np.float32)
+    y = ycrcb[:, :, 0]
+    y_masked = y[mask]
+    if y_masked.size:
+        mean_y = float(np.mean(y_masked))
+        target_y = 150.0
+        y += (target_y - mean_y)
+
+        # Contrast adjustment (std of Y)
+        std_y = float(np.std(y_masked))
+        target_std = 20.0
+        if std_y > 1e-6:
+            alpha_c = target_std / std_y
+            alpha_c = max(0.7, min(1.3, alpha_c))
+            y = (y - mean_y) * alpha_c + mean_y
+
+        # Shadow lift
+        low_thresh = np.percentile(y_masked, 20)
+        low_region = y_masked[y_masked <= low_thresh]
+        if low_region.size:
+            shadow_mean = float(np.mean(low_region))
+            if shadow_mean < 80.0:
+                lift = min(40.0, 80.0 - shadow_mean)
+                y += lift * (1.0 - (y / 255.0))
+
+    ycrcb[:, :, 0] = np.clip(y, 0, 255)
+    bgr = cv2.cvtColor(ycrcb.astype(np.uint8), cv2.COLOR_YCrCb2BGR).astype(np.float32)
+
+    # Saturation adjustment
+    hsv = cv2.cvtColor(bgr.astype(np.uint8), cv2.COLOR_BGR2HSV).astype(np.float32)
+    s = hsv[:, :, 1]
+    s_masked = s[mask]
+    if s_masked.size:
+        mean_s = float(np.mean(s_masked))
+        target_s = 25.0
+        if mean_s > 1e-6:
+            s_scale = target_s / mean_s
+            s_scale = max(0.6, min(1.4, s_scale))
+            s *= s_scale
+    hsv[:, :, 1] = np.clip(s, 0, 255)
+    bgr = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR).astype(np.float32)
+
+    # Sharpness (unsharp mask) if too soft
+    gray = cv2.cvtColor(bgr.astype(np.uint8), cv2.COLOR_BGR2GRAY)
+    sharp_val = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    if sharp_val < 10.0:
+        amount = min(1.2, max(0.3, (10.0 - sharp_val) / 10.0 + 0.3))
+        blur = cv2.GaussianBlur(bgr, (0, 0), 1.0)
+        bgr = cv2.addWeighted(bgr, 1.0 + amount, blur, -amount, 0)
+
+    # Apply only on non-transparent pixels
+    output = original_bgr.copy()
+    output[mask] = np.clip(bgr, 0, 255)[mask]
+    out_b, out_g, out_r = cv2.split(output.astype(np.uint8))
+    return cv2.merge((out_b, out_g, out_r, alpha))
+
+
 def adjust_photo(ctx: Context):
     # Step1. 准备人脸参数
     face_rect = ctx.face["rectangle"]
